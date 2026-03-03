@@ -1,0 +1,22 @@
+html, body {
+  margin: 0;
+  height: 100%;
+  font-family: Arial, sans-serif;
+}
+
+#app {
+  display: flex;
+  height: 100vh;
+}
+
+#legend {
+  width: 250px;
+  padding: 15px;
+  background: #f4f4f4;
+  border-right: 1px solid #ddd;
+}
+
+#cy {
+  flex: 1;
+  height: 100%;
+}

@@ -1,0 +1,16 @@
+{
+  "nodes": [
+    { "id": "App.ts", "dir": "core" },
+    { "id": "UserService.ts", "dir": "services" },
+    { "id": "AuthService.ts", "dir": "services" },
+    { "id": "Database.ts", "dir": "infra" },
+    { "id": "Logger.ts", "dir": "utils" }
+  ],
+  "edges": [
+    { "source": "App.ts", "target": "UserService.ts" },
+    { "source": "App.ts", "target": "AuthService.ts" },
+    { "source": "UserService.ts", "target": "Database.ts" },
+    { "source": "AuthService.ts", "target": "Database.ts" },
+    { "source": "Database.ts", "target": "Logger.ts" }
+  ]
+}
