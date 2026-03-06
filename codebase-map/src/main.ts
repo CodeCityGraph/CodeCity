@@ -3,27 +3,9 @@ import graph from "./graph.json";
 import "./style.css";
 
 // Configuration
-const DEEPWIKI_API_URL = import.meta.env.VITE_DEEPWIKI_API_URL || "http://localhost:8001";
+const DEEPWIKI_API_URL = "http://localhost:8001";
 const REPO_URL = graph.repo_url || "https://github.com/AsyncFuncAI/deepwiki-open";
 const REPO_TYPE = graph.repo_type || "github";
-
-type GraphNode = {
-  id: string;
-  dir: string;
-};
-
-type GraphEdge = {
-  source: string;
-  target: string;
-};
-
-type FileAnalysis = {
-  description?: string;
-  lines?: number;
-  complexity?: string;
-  dependencies?: string[];
-  analysisWarning?: string;
-};
 
 const elements = [
   ...graph.nodes.map(node => ({
@@ -103,20 +85,17 @@ cy.on('tap', 'node', async (evt) => {
     const analysis = await analyzeFile(nodeId);
     displayDetails({ ...nodeInfo, ...analysis }, outgoing, incoming);
   } catch (error) {
-    const errorMessage = toErrorMessage(error);
-    console.warn("DeepWiki analysis unavailable, using fallback details:", errorMessage);
-
-    const fallbackAnalysis = buildFallbackAnalysis(nodeInfo, nodeId, errorMessage);
-    displayDetails({ ...nodeInfo, ...fallbackAnalysis }, outgoing, incoming);
+    console.error("Error analyzing file:", error);
+    displayErrorDetails(nodeInfo, outgoing, incoming, error);
   }
 });
 
 // Function to analyze a file using DeepWiki API
-async function analyzeFile(filePath: string): Promise<FileAnalysis> {
+async function analyzeFile(filePath: string): Promise<any> {
   const response = await fetch(`${DEEPWIKI_API_URL}/api/analyze_file`, {
-    method: "POST",
+    method: 'POST',
     headers: {
-      "Content-Type": "application/json",
+      'Content-Type': 'application/json',
     },
     body: JSON.stringify({
       repo_url: REPO_URL,
@@ -126,52 +105,12 @@ async function analyzeFile(filePath: string): Promise<FileAnalysis> {
       language: "en"
     })
   });
-
+  
   if (!response.ok) {
-    let detail = "Unknown backend error";
-    try {
-      const errorJson = await response.json() as { detail?: string };
-      if (errorJson.detail) {
-        detail = errorJson.detail;
-      }
-    } catch {
-      const errorText = await response.text().catch(() => "");
-      if (errorText) detail = errorText;
-    }
-
-    throw new Error(detail);
+    throw new Error(`API error: ${response.status}`);
   }
-
-  return await response.json() as FileAnalysis;
-}
-
-function toErrorMessage(error: unknown): string {
-  if (error instanceof Error) {
-    if (error.message.includes("Failed to fetch")) {
-      return `DeepWiki API is unreachable at ${DEEPWIKI_API_URL}. Start the backend with: python -m api.main`;
-    }
-    return error.message;
-  }
-  return String(error);
-}
-
-function buildFallbackAnalysis(nodeInfo: Partial<GraphNode> | undefined, filePath: string, errorMessage: string): FileAnalysis {
-  const outgoingDeps = (graph.edges as GraphEdge[])
-    .filter(edge => edge.source === filePath)
-    .map(edge => edge.target);
-
-  const directoryDescriptions: Record<string, string> = {
-    core: "Core orchestration logic that coordinates top-level application behavior.",
-    services: "Service-layer module that handles domain behavior and business rules.",
-    infra: "Infrastructure module for storage, persistence, and external integrations.",
-    utils: "Utility helper module used by multiple parts of the system."
-  };
-
-  return {
-    description: directoryDescriptions[nodeInfo?.dir ?? ""] || "Module in this repository graph.",
-    dependencies: outgoingDeps,
-    analysisWarning: `Live AI analysis unavailable: ${errorMessage}`
-  };
+  
+  return await response.json();
 }
 
 function createDetailsPanel(): HTMLDivElement {
@@ -229,6 +168,27 @@ function displayLoadingDetails(nodeInfo: any, outgoing: number, incoming: number
   `;
 }
 
+function displayErrorDetails(nodeInfo: any, outgoing: number, incoming: number, error: any) {
+  const panel = createDetailsPanel();
+  
+  panel.innerHTML = `
+    <div style="margin-bottom: 12px; padding-bottom: 12px; border-bottom: 2px solid #eee;">
+      <div style="font-size: 16px; font-weight: 600; color: #333; margin-bottom: 4px;">${nodeInfo.id}</div>
+      <div style="font-size: 11px; color: #666; text-transform: uppercase; letter-spacing: 0.5px;">${nodeInfo.dir}</div>
+    </div>
+    <div style="margin-bottom: 12px; padding: 12px; background: #fee; border-left: 3px solid #d62728; color: #c33;">
+      ⚠️ Failed to analyze: ${error.message || 'Unknown error'}
+    </div>
+    <div style="margin-bottom: 12px;">
+      <div style="font-size: 11px; color: #666; margin-bottom: 4px;">Dependencies</div>
+      <div style="display: flex; gap: 12px;">
+        <div><span style="color: #2ca02c; font-weight: 600;">${outgoing}</span> outgoing</div>
+        <div><span style="color: #d62728; font-weight: 600;">${incoming}</span> incoming</div>
+      </div>
+    </div>
+  `;
+}
+
 function displayDetails(nodeInfo: any, outgoing: number, incoming: number) {
   const panel = createDetailsPanel();
   
@@ -241,11 +201,6 @@ function displayDetails(nodeInfo: any, outgoing: number, incoming: number) {
       <div style="font-size: 11px; color: #666; margin-bottom: 4px;">🤖 AI Analysis</div>
       <div style="color: #555;">${nodeInfo.description || 'No description available'}</div>
     </div>
-    ${nodeInfo.analysisWarning ? `
-      <div style="margin-bottom: 12px; padding: 8px; background: #fff7e6; border-left: 3px solid #d97706; color: #9a6700;">
-        ${nodeInfo.analysisWarning}
-      </div>
-    ` : ''}
     <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 12px;">
       <div style="background: #f5f5f5; padding: 8px; border-radius: 4px;">
         <div style="font-size: 11px; color: #666; margin-bottom: 2px;">Lines</div>
