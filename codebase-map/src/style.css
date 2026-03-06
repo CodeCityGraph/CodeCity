@@ -1,7 +1,9 @@
 html, body {
   margin: 0;
   height: 100%;
-  font-family: Arial, sans-serif;
+  font-family: "Avenir Next", "Segoe UI", sans-serif;
+  background: #f8fafc;
+  color: #132a13;
 }
 
 #app {
@@ -10,13 +12,78 @@ html, body {
 }
 
 #legend {
-  width: 250px;
-  padding: 15px;
-  background: #f4f4f4;
-  border-right: 1px solid #ddd;
+  width: 320px;
+  padding: 16px;
+  background: #f1f5f9;
+  border-right: 1px solid #cbd5e1;
+  overflow-y: auto;
+}
+
+#legend h2,
+#legend h3 {
+  margin: 0 0 8px;
+}
+
+#legend p {
+  margin: 6px 0;
+  line-height: 1.25;
+}
+
+#legend .muted {
+  color: #475569;
+  font-size: 13px;
+}
+
+#legend hr {
+  border: 0;
+  border-top: 1px solid #d7dee8;
+  margin: 14px 0;
+}
+
+#legend input[type="file"] {
+  width: 100%;
+  margin: 8px 0 10px;
+}
+
+.row {
+  display: flex;
+  gap: 8px;
+}
+
+#searchInput {
+  flex: 1;
+}
+
+input,
+button {
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid #c2ccd8;
+  font-size: 14px;
+}
+
+button {
+  cursor: pointer;
+  background: #1d4ed8;
+  color: #ffffff;
+  border-color: #1d4ed8;
+}
+
+button:hover {
+  background: #1e40af;
+}
+
+.status {
+  margin-top: 10px;
+  font-size: 13px;
+  color: #0f172a;
 }
 
 #cy {
   flex: 1;
   height: 100%;
+  background:
+    radial-gradient(circle at 20% 15%, #edf6f9 0%, #edf6f9 25%, transparent 26%),
+    radial-gradient(circle at 85% 80%, #e9ecef 0%, #e9ecef 18%, transparent 19%),
+    linear-gradient(135deg, #f8fafc 0%, #eef2f7 100%);
 }

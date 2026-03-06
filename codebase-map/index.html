@@ -1,10 +1,35 @@
 <body>
   <div id="app">
     <div id="legend">
+      <h2>Codebase Map</h2>
+      <p class="muted">Sprint 1 Integration + QA Workspace</p>
+
+      <label for="repoZipInput"><strong>Load Repo Zip</strong></label>
+      <input id="repoZipInput" type="file" accept=".zip" />
+      <button id="loadSample" type="button">Load Sample</button>
+
+      <hr />
+
+      <label for="searchInput"><strong>Search + Focus</strong></label>
+      <div class="row">
+        <input id="searchInput" type="text" placeholder="src/service/user.ts" />
+        <button id="focusButton" type="button">Focus</button>
+      </div>
+
+      <p id="status" class="status">Loaded sample graph.</p>
+
+      <hr />
+
       <h3>Legend</h3>
-      <p>Circle = File</p>
-      <p>Line = Dependency</p>
-      <p>Color = Directory</p>
+      <p>Node: file</p>
+      <p>Node size: file size</p>
+      <p>Color: directory cluster</p>
+      <p>Edge: import dependency</p>
+
+      <h3>Details</h3>
+      <div id="details">
+        <p>Select a node to inspect details.</p>
+      </div>
     </div>
     <div id="cy"></div>
   </div>
