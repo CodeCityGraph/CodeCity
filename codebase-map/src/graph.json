@@ -1,4 +1,6 @@
 {
+  "repo_url": "https://github.com/AsyncFuncAI/deepwiki-open",
+  "repo_type": "github",
   "nodes": [
     { "id": "App.ts", "dir": "core" },
     { "id": "UserService.ts", "dir": "services" },
