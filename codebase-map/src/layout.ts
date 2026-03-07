@@ -26,7 +26,7 @@ function jitter(seed: string, radius: number): Point {
 export function getDirectoryClusterPositions(nodes: GraphNode[]): Record<string, Point> {
   const dirs = Array.from(new Set(nodes.map(node => node.dir))).sort();
   const cols = Math.max(1, Math.ceil(Math.sqrt(dirs.length)));
-  const spacing = 450;
+  const spacing = 410;
   const centers = new Map<string, Point>();
 
   dirs.forEach((dir, index) => {
@@ -48,7 +48,7 @@ export function getDirectoryClusterPositions(nodes: GraphNode[]): Record<string,
   const positions: Record<string, Point> = {};
   for (const [dir, group] of byDir.entries()) {
     const center = centers.get(dir) ?? { x: 0, y: 0 };
-    const radius = 40 + Math.sqrt(group.length) * 35;
+    const radius = 38 + Math.sqrt(group.length) * 28;
     group.forEach(node => {
       const local = jitter(`${dir}/${node.id}`, radius);
       positions[node.id] = {

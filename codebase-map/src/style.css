@@ -233,10 +233,8 @@ button:active {
   margin: 4px 0;
   font-family: "Orbitron", "Space Grotesk", sans-serif;
   letter-spacing: 0.04em;
-  background: linear-gradient(92deg, #f4f8ff 0%, #99c7ff 40%, #a9a3ff 100%);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
+  color: #c9eeff;
+  text-shadow: 0 0 10px rgba(103, 232, 249, 0.35), 0 0 2px rgba(201, 238, 255, 0.9);
   font-size: 15px;
 }
 
