@@ -49,12 +49,21 @@ function requiredElement<T extends HTMLElement>(id: string): T {
 }
 
 const container = requiredElement<HTMLElement>("cy");
+const appRoot = requiredElement<HTMLElement>("app");
 const fileInput = requiredElement<HTMLInputElement>("repoZipInput");
 const sampleButton = requiredElement<HTMLButtonElement>("loadSample");
 const searchInput = requiredElement<HTMLInputElement>("searchInput");
 const focusButton = requiredElement<HTMLButtonElement>("focusButton");
 const statusLabel = requiredElement<HTMLParagraphElement>("status");
 const detailsPanel = requiredElement<HTMLDivElement>("details");
+
+function playGalaxyEntryAnimation(): void {
+  appRoot.classList.remove("warp-in");
+  // Force reflow so the animation restarts when the graph is re-rendered.
+  void appRoot.offsetWidth;
+  appRoot.classList.add("warp-in");
+  window.setTimeout(() => appRoot.classList.remove("warp-in"), 2300);
+}
 
 let cy = createViewer({
   container,
@@ -92,6 +101,7 @@ function reloadViewer(nextGraph: GraphData): void {
     graph: nextGraph,
     onNodeSelect: renderDetails
   });
+  playGalaxyEntryAnimation();
 }
 
 function normalizeText(value: string): string {
@@ -182,3 +192,5 @@ focusButton.addEventListener("click", () => {
     setStatus(`No files matched "${query}". Try filename-only like "userService".`);
   }
 });
+
+playGalaxyEntryAnimation();
