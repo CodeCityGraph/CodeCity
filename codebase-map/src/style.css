@@ -82,6 +82,21 @@ body {
   z-index: 2;
 }
 
+.legend-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 4px;
+}
+
+.legend-logo {
+  width: 34px;
+  height: 34px;
+  border-radius: 8px;
+  object-fit: cover;
+  box-shadow: 0 0 18px rgba(103, 232, 249, 0.34);
+}
+
 #legend h2,
 #legend h3 {
   margin: 0 0 10px;
@@ -314,6 +329,11 @@ button:active {
 
   #cy {
     min-height: 54vh;
+  }
+
+  .legend-logo {
+    width: 30px;
+    height: 30px;
   }
 }
 

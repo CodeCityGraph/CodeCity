@@ -1,7 +1,22 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <link rel="icon" type="image/png" href="/src/assets/code-city-graph-icon.png" />
+  <title>CodeCityGraph</title>
+</head>
 <body>
   <div id="app">
     <div id="legend">
-      <h2>Codebase Map</h2>
+      <div class="legend-header">
+        <img
+          class="legend-logo"
+          src="/src/assets/code-city-graph-icon.png"
+          alt="CodeCityGraph logo"
+        />
+        <h2>Codebase Map</h2>
+      </div>
       <p class="muted">Sprint 1 Integration + QA Workspace</p>
 
       <label for="repoZipInput"><strong>Load Repo Zip</strong></label>
@@ -36,3 +51,4 @@
 
   <script type="module" src="/src/main.ts"></script>
 </body>
+</html>
