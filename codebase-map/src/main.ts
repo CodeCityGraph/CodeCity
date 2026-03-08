@@ -3,9 +3,7 @@ import graph from "./graph.json";
 import "./style.css";
 
 // Configuration
-const DEEPWIKI_API_URL = "http://localhost:8001";
-const REPO_URL = graph.repo_url || "https://github.com/AsyncFuncAI/deepwiki-open";
-const REPO_TYPE = graph.repo_type || "github";
+const LLM_API_URL = "http://localhost:8002";
 
 const elements = [
   ...graph.nodes.map(node => ({
@@ -37,7 +35,7 @@ const cy = cytoscape({
         "background-color": ele => dirColors[ele.data("dir")] || "#999",
         "text-valign": "center",
         color: "#fff",
-        "font-size": 10
+        "font-size": "8px"
       }
     },
     {
@@ -77,12 +75,22 @@ cy.on('tap', 'node', async (evt) => {
   const outgoing = cy.edges(`[source = "${nodeId}"]`).length;
   const incoming = cy.edges(`[target = "${nodeId}"]`).length;
   
+  // Get related files (outgoing dependencies)
+  const relatedFiles = cy.edges(`[source = "${nodeId}"]`)
+    .map(edge => edge.target().data('id'));
+  
   // Show loading state
   displayLoadingDetails(nodeInfo, outgoing, incoming);
   
-  // Fetch analysis from DeepWiki
+  // Fetch analysis from local CodeLlama
   try {
-    const analysis = await analyzeFile(nodeId);
+    const analysis = await analyzeFile(
+      nodeId,
+      nodeInfo.dir,
+      outgoing,
+      incoming,
+      relatedFiles
+    );
     displayDetails({ ...nodeInfo, ...analysis }, outgoing, incoming);
   } catch (error) {
     console.error("Error analyzing file:", error);
@@ -90,24 +98,31 @@ cy.on('tap', 'node', async (evt) => {
   }
 });
 
-// Function to analyze a file using DeepWiki API
-async function analyzeFile(filePath: string): Promise<any> {
-  const response = await fetch(`${DEEPWIKI_API_URL}/api/analyze_file`, {
+// Function to analyze a file using local CodeLlama
+async function analyzeFile(
+  filePath: string,
+  directory: string,
+  outgoing: number,
+  incoming: number,
+  relatedFiles: string[]
+): Promise<any> {
+  const response = await fetch(`${LLM_API_URL}/api/analyze_file`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
-      repo_url: REPO_URL,
       file_path: filePath,
-      type: REPO_TYPE,
-      provider: "google",
-      language: "en"
+      directory,
+      outgoing,
+      incoming,
+      related_files: relatedFiles
     })
   });
   
   if (!response.ok) {
-    throw new Error(`API error: ${response.status}`);
+    const errorText = await response.text();
+    throw new Error(`LLM API error: ${response.status} - ${errorText}`);
   }
   
   return await response.json();
@@ -147,7 +162,7 @@ function displayLoadingDetails(nodeInfo: any, outgoing: number, incoming: number
       <div style="font-size: 11px; color: #666; text-transform: uppercase; letter-spacing: 0.5px;">${nodeInfo.dir}</div>
     </div>
     <div style="margin-bottom: 12px; padding: 20px; text-align: center;">
-      <div style="color: #666; margin-bottom: 8px;">🤖 Analyzing with DeepWiki AI...</div>
+      <div style="color: #666; margin-bottom: 8px;">� Analyzing with CodeLlama...</div>
       <div style="width: 100%; height: 4px; background: #eee; border-radius: 2px; overflow: hidden;">
         <div style="width: 40%; height: 100%; background: #1f77b4; animation: loading 1.5s ease-in-out infinite;"></div>
       </div>
@@ -198,7 +213,7 @@ function displayDetails(nodeInfo: any, outgoing: number, incoming: number) {
       <div style="font-size: 11px; color: #666; text-transform: uppercase; letter-spacing: 0.5px;">${nodeInfo.dir}</div>
     </div>
     <div style="margin-bottom: 12px; padding: 8px; background: #f0f8ff; border-left: 3px solid #1f77b4;">
-      <div style="font-size: 11px; color: #666; margin-bottom: 4px;">🤖 AI Analysis</div>
+      <div style="font-size: 11px; color: #666; margin-bottom: 4px;">� CodeLlama Analysis</div>
       <div style="color: #555;">${nodeInfo.description || 'No description available'}</div>
     </div>
     <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 12px;">
