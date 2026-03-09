@@ -21,6 +21,7 @@ CodeCity is a Sprint 1 prototype that converts a repository into an interactive 
 ## Project Structure
 
 - `codebase-map/` - main frontend app
+- `llm-server/` - local FastAPI backend that calls Ollama/CodeLlama for node summaries
 - `codebase-map/src/main.ts` - app wiring (upload, search/focus, status, details)
 - `codebase-map/src/analyzer.ts` - zip -> graph analyzer pipeline
 - `codebase-map/src/viewer.ts` - Cytoscape viewer creation and styling
@@ -41,6 +42,18 @@ npm run dev
 Important: run `npm run dev` inside `codebase-map/` (not repo root).
 
 Then open the local URL printed by Vite (typically `http://localhost:5173/`).
+
+## Local AI Backend (LLM Server)
+
+The frontend is integrated with a local LLM backend for file-level summaries:
+
+- Frontend calls: `http://localhost:8002/api/analyze_file`
+- Backend: FastAPI (`llm-server/server.py`)
+- Model runtime: Ollama with `codellama:7b-instruct`
+
+For full backend setup, Ollama install, and troubleshooting steps, see:
+
+- `llm-server/README.md`
 
 ## How to Use (Integration Workflow)
 
