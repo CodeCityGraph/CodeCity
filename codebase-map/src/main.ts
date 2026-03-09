@@ -4,6 +4,9 @@ import type { GraphData } from "./types";
 import { createViewer } from "./viewer";
 import "./style.css";
 
+const LLM_API_URL = "http://localhost:8002";
+let detailsRequestCounter = 0;
+
 function normalizeSampleGraph(raw: typeof graph): GraphData {
   const inDegree = new Map<string, number>();
   const outDegree = new Map<string, number>();
@@ -76,6 +79,7 @@ function setStatus(text: string): void {
 }
 
 function renderDetails(nodeId: string | null): void {
+  const requestId = ++detailsRequestCounter;
   if (!nodeId) {
     detailsPanel.innerHTML = "<p>Select a node to inspect details.</p>";
     return;
@@ -91,7 +95,63 @@ function renderDetails(nodeId: string | null): void {
     <p><strong>Size:</strong> ${node.data("sizeBytes")} bytes</p>
     <p><strong>In/Out:</strong> ${node.data("inDegree")} / ${node.data("outDegree")}</p>
     <p><strong>Risk:</strong> ${Number(node.data("riskScore")).toFixed(2)}</p>
+    <p><strong>CodeLlama Summary:</strong></p>
+    <p id="llm-explanation" data-request-id="${requestId}">Loading explanation...</p>
   `;
+
+  void populateNodeExplanation(nodeId, requestId);
+}
+
+async function populateNodeExplanation(nodeId: string, requestId: number): Promise<void> {
+  const node = cy.getElementById(nodeId);
+  if (!node || node.empty()) return;
+
+  const path = String(node.data("path") ?? nodeId);
+  const dir = String(node.data("dir") ?? "unknown");
+  const outgoing = Number(node.data("outDegree") ?? 0);
+  const incoming = Number(node.data("inDegree") ?? 0);
+  const relatedFiles = node
+    .connectedEdges()
+    .connectedNodes()
+    .filter(n => n.id() !== nodeId)
+    .map(n => String(n.data("path") ?? n.id()))
+    .slice(0, 6);
+
+  let explanation = "CodeLlama is unavailable for this node.";
+
+  try {
+    const response = await fetch(`${LLM_API_URL}/api/analyze_file`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        file_path: path,
+        directory: dir,
+        outgoing,
+        incoming,
+        related_files: relatedFiles
+      })
+    });
+
+    if (response.ok) {
+      const data = (await response.json()) as { description?: string };
+      if (data.description && data.description.trim().length > 0) {
+        explanation = data.description.trim();
+      } else {
+        explanation = "CodeLlama returned an empty explanation.";
+      }
+    } else {
+      explanation = `CodeLlama request failed (${response.status}).`;
+    }
+  } catch {
+    explanation = "Could not reach local CodeLlama server on port 8002.";
+  }
+
+  const target = detailsPanel.querySelector(
+    `#llm-explanation[data-request-id=\"${requestId}\"]`
+  ) as HTMLParagraphElement | null;
+
+  if (!target || requestId !== detailsRequestCounter) return;
+  target.textContent = explanation;
 }
 
 function reloadViewer(nextGraph: GraphData): void {
