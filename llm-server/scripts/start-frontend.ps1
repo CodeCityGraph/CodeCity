@@ -7,5 +7,7 @@ Write-Host ""
 Write-Host "Press Ctrl+C to stop the server" -ForegroundColor Gray
 Write-Host ""
 
-Set-Location codebase-map
+$scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+$repoRoot = Resolve-Path (Join-Path $scriptDir "..\\..")
+Set-Location (Join-Path $repoRoot "codebase-map")
 npm run dev

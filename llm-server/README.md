@@ -55,14 +55,14 @@ pip install -r requirements.txt
 python server.py
 ```
 
-The server will start on **http://localhost:8001**
+The server will start on **http://localhost:8002**
 
 ### Check Health
 
-Visit http://localhost:8001 in your browser or run:
+Visit http://localhost:8002 in your browser or run:
 
 ```bash
-curl http://localhost:8001/api/health
+curl http://localhost:8002/api/health
 ```
 
 Expected response:
@@ -72,6 +72,22 @@ Expected response:
   "model_available": true,
   "model": "codellama:7b-instruct"
 }
+```
+
+### Windows helper scripts
+
+PowerShell helper scripts are located in:
+
+- `llm-server/scripts/setup.ps1`
+- `llm-server/scripts/start-llm-server.ps1`
+- `llm-server/scripts/start-frontend.ps1`
+
+From repository root, you can run:
+
+```powershell
+.\llm-server\scripts\setup.ps1
+.\llm-server\scripts\start-llm-server.ps1
+.\llm-server\scripts\start-frontend.ps1
 ```
 
 ## API Endpoints

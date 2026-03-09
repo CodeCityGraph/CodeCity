@@ -4,6 +4,9 @@
 Write-Host "=== CodeCity Setup ===" -ForegroundColor Cyan
 Write-Host ""
 
+$scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+$repoRoot = Resolve-Path (Join-Path $scriptDir "..\\..")
+
 # Check if Ollama is installed
 Write-Host "Checking Ollama installation..." -ForegroundColor Yellow
 $ollamaInstalled = Get-Command ollama -ErrorAction SilentlyContinue
@@ -37,7 +40,7 @@ Write-Host ""
 
 # Install Python dependencies
 Write-Host "Setting up LLM server..." -ForegroundColor Yellow
-Push-Location llm-server
+Push-Location (Join-Path $repoRoot "llm-server")
 try {
     $pythonCmd = Get-Command python -ErrorAction SilentlyContinue
     if ($pythonCmd) {
@@ -54,7 +57,7 @@ Write-Host ""
 
 # Install frontend dependencies
 Write-Host "Setting up frontend..." -ForegroundColor Yellow
-Push-Location codebase-map
+Push-Location (Join-Path $repoRoot "codebase-map")
 try {
     if (Test-Path "node_modules") {
         Write-Host "✅ Frontend dependencies already installed" -ForegroundColor Green
@@ -73,12 +76,10 @@ Write-Host ""
 Write-Host "To start the application:" -ForegroundColor Cyan
 Write-Host ""
 Write-Host "1️⃣  Start LLM server (in one terminal):" -ForegroundColor Yellow
-Write-Host "   cd llm-server" -ForegroundColor White
-Write-Host "   python server.py" -ForegroundColor White
+Write-Host "   .\\llm-server\\scripts\\start-llm-server.ps1" -ForegroundColor White
 Write-Host ""
 Write-Host "2️⃣  Start frontend (in another terminal):" -ForegroundColor Yellow  
-Write-Host "   cd codebase-map" -ForegroundColor White
-Write-Host "   npm run dev" -ForegroundColor White
+Write-Host "   .\\llm-server\\scripts\\start-frontend.ps1" -ForegroundColor White
 Write-Host ""
 Write-Host "3️⃣  Open browser to: http://localhost:5173" -ForegroundColor Yellow
 Write-Host ""

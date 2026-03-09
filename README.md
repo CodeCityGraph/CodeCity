@@ -55,6 +55,12 @@ For full backend setup, Ollama install, and troubleshooting steps, see:
 
 - `llm-server/README.md`
 
+Windows PowerShell helper scripts are now organized under:
+
+- `llm-server/scripts/setup.ps1`
+- `llm-server/scripts/start-llm-server.ps1`
+- `llm-server/scripts/start-frontend.ps1`
+
 ## How to Use (Integration Workflow)
 
 1. Click **Load Repo Zip** and select a repository `.zip`.
