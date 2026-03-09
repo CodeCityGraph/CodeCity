@@ -1,121 +1,78 @@
-# CodeCity Visualization
+# CodeCity
 
-Codebase visualization tool with AI-powered file analysis using **local CodeLlama**.
+CodeCity is a Sprint 1 prototype that converts a repository into an interactive dependency map ("city/galaxy" style view) for exploration.
 
-## Quick Start
+## Sprint 1 Scope (Implemented)
 
-### 1. Install Ollama
+- Load a repository `.zip` in the browser
+- Analyze JS/TS files and generate a graph in-memory
+- Render a clustered dependency map with pan/zoom
+- Show legend/help + node details panel
+- Support fuzzy search + focus for files
 
-Download and install Ollama from: **https://ollama.com/download**
+## Tech Stack
 
-For Windows, download the installer and run it. Ollama will start automatically in the background.
+- TypeScript
+- Vite
+- Cytoscape.js
+- JSZip
+- Node.js `>=22.12.0` (recommended: latest Node 22 LTS)
 
-### 2. Pull CodeLlama Model
+## Project Structure
 
-Open PowerShell and run:
+- `codebase-map/` - main frontend app
+- `codebase-map/src/main.ts` - app wiring (upload, search/focus, status, details)
+- `codebase-map/src/analyzer.ts` - zip -> graph analyzer pipeline
+- `codebase-map/src/viewer.ts` - Cytoscape viewer creation and styling
+- `codebase-map/src/layout.ts` - directory-cluster initial positioning
+- `codebase-map/src/types.ts` - graph/analyzer types
+- `codebase-map/src/graph.json` - sample graph fallback
 
-```powershell
-ollama pull codellama:7b-instruct
-```
+## Setup and Run
 
-This downloads the CodeLlama 7B model (~3.8 GB). First-time download takes a few minutes.
-
-### 3. Start the LLM Server
-
-```powershell
-cd llm-server
-pip install -r requirements.txt
-python server.py
-```
-
-The server starts at **http://localhost:8001**
-
-### 4. Start the Visualization
-
-In a new terminal:
-
-```powershell
+```bash
+# from repository root
 cd codebase-map
+nvm use || nvm install
 npm install
 npm run dev
 ```
 
-The visualization opens at **http://localhost:5173**
+Important: run `npm run dev` inside `codebase-map/` (not repo root).
 
-## Usage
+Then open the local URL printed by Vite (typically `http://localhost:5173/`).
 
-1. Open http://localhost:5173 in your browser
-2. Click any node in the graph
-3. CodeLlama analyzes the file and shows:
-   - AI-generated description
-   - Complexity analysis
-   - Dependency information
+## How to Use (Integration Workflow)
 
-## Architecture
+1. Click **Load Repo Zip** and select a repository `.zip`.
+2. The app analyzes JS/TS imports and creates a graph:
+   - Nodes: file path, directory, extension, size, LOC, degree metrics, risk score
+   - Edges: source/target import relationships
+3. Explore the map:
+   - Drag nodes to reposition
+   - Pan the view (bounded to visible graph area)
+   - Zoom in is allowed; zoom out is limited to the initial full-graph fit
+   - Color indicates directory cluster
+   - Node size reflects file size
+   - Click node for detailed metrics
+4. Use **Search + Focus** to highlight matching files and related edges.
+5. Use **Load Sample** to return to the built-in demo graph.
 
-- **Frontend**: Vite + TypeScript + Cytoscape.js (graph visualization)
-- **LLM Server**: FastAPI + Ollama + CodeLlama (local AI analysis)
-- **No external APIs required** - runs completely offline
+## Dummy Sample Data
 
-## Troubleshooting
+You can use the included fixture zip for a quick demo:
 
-### "Ollama is not running"
+- `codebase-map/fixtures/dummy-repo.zip`
 
-- Windows: Check system tray for Ollama icon
-- Or run manually: `ollama serve`
+This fixture contains sample JS/TS files plus ignored folders (`dist`, `node_modules`) to validate analyzer behavior.
 
-### Slow analysis
+## Analyzer Behavior (Current)
 
-- First request loads model (10-30 seconds)  
-- Subsequent requests are faster (2-10 seconds)
-- Speed depends on CPU/GPU
-
-### Connection refused
-
-Make sure both servers are running:
-1. LLM server on port 8001
-2. Vite dev server on port 5173
-
-## Customization
-
-### Use different CodeLlama model
-
-Edit `llm-server/server.py`:
-
-```python
-MODEL_NAME = "codellama:13b-instruct"  # Larger, more accurate
-```
-
-Pull the model:
-```bash
-ollama pull codellama:13b-instruct
-```
-
-### Change analysis prompt
-
-Edit the `prompt` variable in `llm-server/server.py` to customize what CodeLlama analyzes.
-
-## Project Structure
-
-```
-CodeCity/
-├── codebase-map/          # Frontend visualization
-│   ├── src/
-│   │   ├── main.ts        # Main application logic  
-│   │   ├── graph.json     # Graph data
-│   │   └── style.css      # Styles
-│   └── package.json
-│
-└── llm-server/            # Local LLM backend
-    ├── server.py          # FastAPI server
-    ├── requirements.txt   # Python dependencies
-    └── README.md          # Detailed server docs
-```
-
-## Benefits of Local LLM
-
-✅ **No API keys required** - runs completely offline  
-✅ **No usage costs** - unlimited analysis  
-✅ **Privacy** - code never leaves your machine  
-✅ **Fast** - local inference (especially with GPU)  
-✅ **Customizable** - modify prompts and models freely
+- Ignores: `node_modules`, `dist`, `out`, `.output`, `.git`
+- Extensions: `.js`, `.jsx`, `.ts`, `.tsx`, `.mjs`, `.cjs`
+- Dependency extraction: regex-based for:
+  - `import ... from "x"`
+  - `import "x"`
+  - `require("x")`
+  - `import("x")`
+- Unresolved imports are logged and do not crash the analysis.

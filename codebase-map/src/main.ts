@@ -1,243 +1,196 @@
-import cytoscape from "cytoscape";
 import graph from "./graph.json";
+import { createGraphFromZip } from "./analyzer";
+import type { GraphData } from "./types";
+import { createViewer } from "./viewer";
 import "./style.css";
 
-// Configuration
-const LLM_API_URL = "http://localhost:8002";
-
-const elements = [
-  ...graph.nodes.map(node => ({
-    data: { id: node.id, dir: node.dir }
-  })),
-  ...graph.edges.map(edge => ({
-    data: { source: edge.source, target: edge.target }
-  }))
-];
-
-// Simple color map by directory
-const dirColors: Record<string, string> = {
-  core: "#1f77b4",
-  services: "#2ca02c",
-  infra: "#d62728",
-  utils: "#9467bd"
-};
-
-const cy = cytoscape({
-  container: document.getElementById("cy"),
-
-  elements,
-
-  style: [
-    {
-      selector: "node",
-      style: {
-        label: "data(id)",
-        "background-color": ele => dirColors[ele.data("dir")] || "#999",
-        "text-valign": "center",
-        color: "#fff",
-        "font-size": "8px"
-      }
-    },
-    {
-      selector: "edge",
-      style: {
-        width: 2,
-        "line-color": "#ccc",
-        "target-arrow-color": "#ccc",
-        "target-arrow-shape": "triangle",
-        "curve-style": "bezier"
-      }
-    }
-  ],
-  
-
-  layout: {
-    name: "cose",
-    animate: true
-  }
-});
-
-  // Store full node data for details panel
-  cy.nodes().forEach((cyNode) => {
-    const nodeId = cyNode.data("id");
-    const nodeData = graph.nodes.find(n => n.id === nodeId);
-    if (nodeData) {
-      cyNode.data("nodeInfo", nodeData);
-    }
+function normalizeSampleGraph(raw: typeof graph): GraphData {
+  const inDegree = new Map<string, number>();
+  const outDegree = new Map<string, number>();
+  raw.nodes.forEach(node => {
+    inDegree.set(node.id, 0);
+    outDegree.set(node.id, 0);
+  });
+  raw.edges.forEach(edge => {
+    outDegree.set(edge.source, (outDegree.get(edge.source) ?? 0) + 1);
+    inDegree.set(edge.target, (inDegree.get(edge.target) ?? 0) + 1);
   });
 
-cy.on('tap', 'node', async (evt) => {
-  const node = evt.target;
-  const nodeInfo = node.data('nodeInfo');
-  const nodeId = node.data('id');
-  
-  // Calculate dependencies
-  const outgoing = cy.edges(`[source = "${nodeId}"]`).length;
-  const incoming = cy.edges(`[target = "${nodeId}"]`).length;
-  
-  // Get related files (outgoing dependencies)
-  const relatedFiles = cy.edges(`[source = "${nodeId}"]`)
-    .map(edge => edge.target().data('id'));
-  
-  // Show loading state
-  displayLoadingDetails(nodeInfo, outgoing, incoming);
-  
-  // Fetch analysis from local CodeLlama
+  return {
+    nodes: raw.nodes.map(node => ({
+      id: node.id,
+      path: node.id,
+      dir: node.dir,
+      ext: node.id.includes(".") ? `.${node.id.split(".").pop()}` : "",
+      sizeBytes: 200,
+      loc: 15,
+      inDegree: inDegree.get(node.id) ?? 0,
+      outDegree: outDegree.get(node.id) ?? 0,
+      riskScore:
+        (inDegree.get(node.id) ?? 0) +
+        (outDegree.get(node.id) ?? 0) +
+        Math.log(200)
+    })),
+    edges: raw.edges.map(edge => ({
+      source: edge.source,
+      target: edge.target,
+      type: "import" as const
+    })),
+    unresolvedImports: []
+  };
+}
+
+function requiredElement<T extends HTMLElement>(id: string): T {
+  const element = document.getElementById(id);
+  if (!element) {
+    throw new Error(`Missing element #${id}`);
+  }
+  return element as T;
+}
+
+const container = requiredElement<HTMLElement>("cy");
+const appRoot = requiredElement<HTMLElement>("app");
+const fileInput = requiredElement<HTMLInputElement>("repoZipInput");
+const sampleButton = requiredElement<HTMLButtonElement>("loadSample");
+const searchInput = requiredElement<HTMLInputElement>("searchInput");
+const focusButton = requiredElement<HTMLButtonElement>("focusButton");
+const statusLabel = requiredElement<HTMLParagraphElement>("status");
+const detailsPanel = requiredElement<HTMLDivElement>("details");
+
+function playGalaxyEntryAnimation(): void {
+  appRoot.classList.remove("warp-in");
+  // Force reflow so the animation restarts when the graph is re-rendered.
+  void appRoot.offsetWidth;
+  appRoot.classList.add("warp-in");
+  window.setTimeout(() => appRoot.classList.remove("warp-in"), 2300);
+}
+
+let cy = createViewer({
+  container,
+  graph: normalizeSampleGraph(graph),
+  onNodeSelect: renderDetails
+});
+
+function setStatus(text: string): void {
+  statusLabel.textContent = text;
+}
+
+function renderDetails(nodeId: string | null): void {
+  if (!nodeId) {
+    detailsPanel.innerHTML = "<p>Select a node to inspect details.</p>";
+    return;
+  }
+  const node = cy.getElementById(nodeId);
+  if (!node || node.empty()) return;
+  detailsPanel.innerHTML = `
+    <h4>${node.data("label")}</h4>
+    <p><strong>Path:</strong> ${node.data("path")}</p>
+    <p><strong>Directory:</strong> ${node.data("dir")}</p>
+    <p><strong>Ext:</strong> ${node.data("ext") || "(none)"}</p>
+    <p><strong>LOC:</strong> ${node.data("loc")}</p>
+    <p><strong>Size:</strong> ${node.data("sizeBytes")} bytes</p>
+    <p><strong>In/Out:</strong> ${node.data("inDegree")} / ${node.data("outDegree")}</p>
+    <p><strong>Risk:</strong> ${Number(node.data("riskScore")).toFixed(2)}</p>
+  `;
+}
+
+function reloadViewer(nextGraph: GraphData): void {
+  cy.destroy();
+  cy = createViewer({
+    container,
+    graph: nextGraph,
+    onNodeSelect: renderDetails
+  });
+  playGalaxyEntryAnimation();
+}
+
+function normalizeText(value: string): string {
+  return value.toLowerCase().replace(/\\/g, "/");
+}
+
+function tokenize(value: string): string[] {
+  return normalizeText(value)
+    .split(/[^a-z0-9]+/g)
+    .filter(Boolean);
+}
+
+function tokenMatches(pathToken: string, queryToken: string): boolean {
+  if (pathToken.includes(queryToken) || queryToken.includes(pathToken)) return true;
+  if (pathToken.endsWith("s") && pathToken.slice(0, -1) === queryToken) return true;
+  if (queryToken.endsWith("s") && queryToken.slice(0, -1) === pathToken) return true;
+  return false;
+}
+
+function matchesQuery(path: string, query: string): boolean {
+  const normalizedPath = normalizeText(path);
+  const normalizedQuery = normalizeText(query);
+  if (normalizedPath.includes(normalizedQuery)) return true;
+
+  const filename = normalizedPath.split("/").pop() ?? normalizedPath;
+  if (filename.includes(normalizedQuery)) return true;
+
+  const pathTokens = tokenize(normalizedPath);
+  const queryTokens = tokenize(normalizedQuery);
+  if (queryTokens.length === 0) return false;
+
+  return queryTokens.every(queryToken =>
+    pathTokens.some(pathToken => tokenMatches(pathToken, queryToken))
+  );
+}
+
+sampleButton.addEventListener("click", () => {
+  reloadViewer(normalizeSampleGraph(graph));
+  setStatus("Loaded sample graph.");
+  renderDetails(null);
+});
+
+fileInput.addEventListener("change", async event => {
+  const target = event.target as HTMLInputElement;
+  const file = target.files?.[0];
+  if (!file) return;
+
+  setStatus(`Analyzing ${file.name}...`);
   try {
-    const analysis = await analyzeFile(
-      nodeId,
-      nodeInfo.dir,
-      outgoing,
-      incoming,
-      relatedFiles
+    const analyzed = await createGraphFromZip(file);
+    reloadViewer(analyzed);
+    setStatus(
+      `Loaded ${analyzed.nodes.length} files, ${analyzed.edges.length} edges. ` +
+      `Unresolved imports: ${analyzed.unresolvedImports.length}`
     );
-    displayDetails({ ...nodeInfo, ...analysis }, outgoing, incoming);
+    renderDetails(null);
   } catch (error) {
-    console.error("Error analyzing file:", error);
-    displayErrorDetails(nodeInfo, outgoing, incoming, error);
+    const message = error instanceof Error ? error.message : "Unknown error";
+    setStatus(`Failed to analyze zip: ${message}`);
   }
 });
 
-// Function to analyze a file using local CodeLlama
-async function analyzeFile(
-  filePath: string,
-  directory: string,
-  outgoing: number,
-  incoming: number,
-  relatedFiles: string[]
-): Promise<any> {
-  const response = await fetch(`${LLM_API_URL}/api/analyze_file`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      file_path: filePath,
-      directory,
-      outgoing,
-      incoming,
-      related_files: relatedFiles
-    })
+focusButton.addEventListener("click", () => {
+  const query = searchInput.value.trim();
+  const nodes = cy.nodes();
+  if (!query) {
+    nodes.removeClass("dimmed");
+    cy.edges().removeClass("dimmed");
+    setStatus("Filter cleared.");
+    return;
+  }
+
+  const matches = nodes.filter(node => {
+    const path = String(node.data("path"));
+    return matchesQuery(path, query);
   });
-  
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`LLM API error: ${response.status} - ${errorText}`);
+
+  nodes.addClass("dimmed");
+  cy.edges().addClass("dimmed");
+  matches.removeClass("dimmed");
+  matches.connectedEdges().removeClass("dimmed");
+  matches.connectedEdges().connectedNodes().removeClass("dimmed");
+
+  if (matches.length > 0) {
+    cy.fit(matches, 70);
+    setStatus(`Focused ${matches.length} node(s) for "${query}".`);
+  } else {
+    setStatus(`No files matched "${query}". Try filename-only like "userService".`);
   }
-  
-  return await response.json();
-}
+});
 
-function createDetailsPanel(): HTMLDivElement {
-  let panel = document.getElementById('details-panel') as HTMLDivElement;
-  if (!panel) {
-    panel = document.createElement('div');
-    panel.id = 'details-panel';
-    panel.style.cssText = `
-      position: fixed;
-      top: 10px;
-      right: 10px;
-      width: 320px;
-      background: white;
-      border: 1px solid #ccc;
-      border-radius: 5px;
-      padding: 15px;
-      box-shadow: 0 2px 8px rgba(0,0,0,0.15);
-      z-index: 1000;
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-      font-size: 13px;
-      line-height: 1.5;
-    `;
-    document.body.appendChild(panel);
-  }
-  return panel;
-}
-
-function displayLoadingDetails(nodeInfo: any, outgoing: number, incoming: number) {
-  const panel = createDetailsPanel();
-  
-  panel.innerHTML = `
-    <div style="margin-bottom: 12px; padding-bottom: 12px; border-bottom: 2px solid #eee;">
-      <div style="font-size: 16px; font-weight: 600; color: #333; margin-bottom: 4px;">${nodeInfo.id}</div>
-      <div style="font-size: 11px; color: #666; text-transform: uppercase; letter-spacing: 0.5px;">${nodeInfo.dir}</div>
-    </div>
-    <div style="margin-bottom: 12px; padding: 20px; text-align: center;">
-      <div style="color: #666; margin-bottom: 8px;">� Analyzing with CodeLlama...</div>
-      <div style="width: 100%; height: 4px; background: #eee; border-radius: 2px; overflow: hidden;">
-        <div style="width: 40%; height: 100%; background: #1f77b4; animation: loading 1.5s ease-in-out infinite;"></div>
-      </div>
-    </div>
-    <div style="margin-bottom: 12px;">
-      <div style="font-size: 11px; color: #666; margin-bottom: 4px;">Dependencies</div>
-      <div style="display: flex; gap: 12px;">
-        <div><span style="color: #2ca02c; font-weight: 600;">${outgoing}</span> outgoing</div>
-        <div><span style="color: #d62728; font-weight: 600;">${incoming}</span> incoming</div>
-      </div>
-    </div>
-    <style>
-      @keyframes loading {
-        0% { transform: translateX(-100%); }
-        100% { transform: translateX(350%); }
-      }
-    </style>
-  `;
-}
-
-function displayErrorDetails(nodeInfo: any, outgoing: number, incoming: number, error: any) {
-  const panel = createDetailsPanel();
-  
-  panel.innerHTML = `
-    <div style="margin-bottom: 12px; padding-bottom: 12px; border-bottom: 2px solid #eee;">
-      <div style="font-size: 16px; font-weight: 600; color: #333; margin-bottom: 4px;">${nodeInfo.id}</div>
-      <div style="font-size: 11px; color: #666; text-transform: uppercase; letter-spacing: 0.5px;">${nodeInfo.dir}</div>
-    </div>
-    <div style="margin-bottom: 12px; padding: 12px; background: #fee; border-left: 3px solid #d62728; color: #c33;">
-      ⚠️ Failed to analyze: ${error.message || 'Unknown error'}
-    </div>
-    <div style="margin-bottom: 12px;">
-      <div style="font-size: 11px; color: #666; margin-bottom: 4px;">Dependencies</div>
-      <div style="display: flex; gap: 12px;">
-        <div><span style="color: #2ca02c; font-weight: 600;">${outgoing}</span> outgoing</div>
-        <div><span style="color: #d62728; font-weight: 600;">${incoming}</span> incoming</div>
-      </div>
-    </div>
-  `;
-}
-
-function displayDetails(nodeInfo: any, outgoing: number, incoming: number) {
-  const panel = createDetailsPanel();
-  
-  panel.innerHTML = `
-    <div style="margin-bottom: 12px; padding-bottom: 12px; border-bottom: 2px solid #eee;">
-      <div style="font-size: 16px; font-weight: 600; color: #333; margin-bottom: 4px;">${nodeInfo.id}</div>
-      <div style="font-size: 11px; color: #666; text-transform: uppercase; letter-spacing: 0.5px;">${nodeInfo.dir}</div>
-    </div>
-    <div style="margin-bottom: 12px; padding: 8px; background: #f0f8ff; border-left: 3px solid #1f77b4;">
-      <div style="font-size: 11px; color: #666; margin-bottom: 4px;">� CodeLlama Analysis</div>
-      <div style="color: #555;">${nodeInfo.description || 'No description available'}</div>
-    </div>
-    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 12px;">
-      <div style="background: #f5f5f5; padding: 8px; border-radius: 4px;">
-        <div style="font-size: 11px; color: #666; margin-bottom: 2px;">Lines</div>
-        <div style="font-size: 18px; font-weight: 600; color: #333;">${nodeInfo.lines || 'N/A'}</div>
-      </div>
-      <div style="background: #f5f5f5; padding: 8px; border-radius: 4px;">
-        <div style="font-size: 11px; color: #666; margin-bottom: 2px;">Complexity</div>
-        <div style="font-size: 18px; font-weight: 600; color: #333;">${nodeInfo.complexity || 'N/A'}</div>
-      </div>
-    </div>
-    <div style="margin-bottom: 12px;">
-      <div style="font-size: 11px; color: #666; margin-bottom: 4px;">Dependencies</div>
-      <div style="display: flex; gap: 12px; margin-bottom: 8px;">
-        <div><span style="color: #2ca02c; font-weight: 600;">${outgoing}</span> outgoing</div>
-        <div><span style="color: #d62728; font-weight: 600;">${incoming}</span> incoming</div>
-      </div>
-      ${nodeInfo.dependencies && nodeInfo.dependencies.length > 0 ? `
-        <div style="font-size: 11px; color: #666;">Related files: ${nodeInfo.dependencies.join(', ')}</div>
-      ` : ''}
-    </div>
-    <div style="font-size: 11px; color: #999;">
-      Last modified: ${nodeInfo.lastModified || 'Unknown'}
-    </div>
-  `;
-}
+playGalaxyEntryAnimation();
