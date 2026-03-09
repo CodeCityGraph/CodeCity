@@ -90,23 +90,23 @@ async def analyze_file(request: FileSummaryRequest):
         # Extract file metadata
         file_name = request.file_path.split('/')[-1]
         extension = file_name.split('.')[-1] if '.' in file_name else 'unknown'
-        
+    #File: {request.file_path}
+#Directory: {request.directory or 'unknown'}
+#Extension: {extension}
+#Outgoing dependencies: {request.outgoing}
+#Incoming dependencies: {request.incoming}
+#Related files: {', '.join(request.related_files[:5]) if request.related_files else 'none'}
         # Build prompt for CodeLlama
-        prompt = f"""You are a code analyst. Analyze this file based on its metadata and provide a concise 2-3 sentence summary.
+        prompt = f"""You are a code analyst. Analyze this file based on its metadata and provide a concise 2-34 sentence summary.
 
-File: {request.file_path}
-Directory: {request.directory or 'unknown'}
-Extension: {extension}
-Outgoing dependencies: {request.outgoing}
-Incoming dependencies: {request.incoming}
-Related files: {', '.join(request.related_files[:5]) if request.related_files else 'none'}
+
 
 Provide a technical summary describing:
-1. The file's likely purpose and role in the codebase
-2. Its complexity level ({complexity} complexity based on {coupling} total dependencies)
-3. Key responsibilities or patterns it might implement
+1. What functions are included in this file
+2. What is the main output of this file
+3. main responsibility of this file
 
-Keep your response concise (2-3 sentences) and technical."""
+Keep your response concise (2-4 sentences) and technical. Try to avoid generic statements and focus on the specific role of this file in the codebase. Try to avoid "may", "might", "likely", or other forms of uncertainty."""
 
         # Call Ollama API
         async with httpx.AsyncClient(timeout=30.0) as client:
