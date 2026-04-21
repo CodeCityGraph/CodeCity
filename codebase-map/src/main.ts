@@ -57,6 +57,9 @@ const fileInput = requiredElement<HTMLInputElement>("repoZipInput");
 const sampleButton = requiredElement<HTMLButtonElement>("loadSample");
 const searchInput = requiredElement<HTMLInputElement>("searchInput");
 const focusButton = requiredElement<HTMLButtonElement>("focusButton");
+const bottleneckCountInput = requiredElement<HTMLInputElement>("bottleneckCount");
+const applyBottleneckFilterButton = requiredElement<HTMLButtonElement>("applyBottleneckFilter");
+const clearBottleneckFilterButton = requiredElement<HTMLButtonElement>("clearBottleneckFilter");
 const statusLabel = requiredElement<HTMLParagraphElement>("status");
 const detailsPanel = requiredElement<HTMLDivElement>("details");
 
@@ -86,6 +89,10 @@ function renderDetails(nodeId: string | null): void {
   }
   const node = cy.getElementById(nodeId);
   if (!node || node.empty()) return;
+  const indicators: string[] = [];
+  if (Boolean(node.data("isHighCoupling"))) indicators.push("Highly coupled");
+  if (Boolean(node.data("isCritical"))) indicators.push("Critical");
+
   detailsPanel.innerHTML = `
     <h4>${node.data("label")}</h4>
     <p><strong>Path:</strong> ${node.data("path")}</p>
@@ -94,7 +101,9 @@ function renderDetails(nodeId: string | null): void {
     <p><strong>LOC:</strong> ${node.data("loc")}</p>
     <p><strong>Size:</strong> ${node.data("sizeBytes")} bytes</p>
     <p><strong>In/Out:</strong> ${node.data("inDegree")} / ${node.data("outDegree")}</p>
+    <p><strong>Coupling:</strong> ${node.data("coupling")}</p>
     <p><strong>Risk:</strong> ${Number(node.data("riskScore")).toFixed(2)}</p>
+    <p><strong>Indicators:</strong> ${indicators.length > 0 ? indicators.join(" | ") : "None"}</p>
     <p><strong>CodeLlama Summary:</strong></p>
     <p id="llm-explanation" data-request-id="${requestId}">Loading explanation...</p>
   `;
@@ -164,6 +173,55 @@ function reloadViewer(nextGraph: GraphData): void {
   playGalaxyEntryAnimation();
 }
 
+function clearBottleneckFilter(): void {
+  cy.nodes().removeClass("bottleneck-hidden");
+  cy.edges().removeClass("bottleneck-hidden");
+}
+
+function applyBottleneckFilter(count: number): void {
+  const sanitizedCount = Math.max(1, Math.floor(count));
+  const sortedNodes = cy
+    .nodes()
+    .toArray()
+    .sort((a, b) => {
+      const byIncoming = Number(b.data("inDegree") ?? 0) - Number(a.data("inDegree") ?? 0);
+      if (byIncoming !== 0) return byIncoming;
+      return Number(b.data("outDegree") ?? 0) - Number(a.data("outDegree") ?? 0);
+    });
+
+  const candidates = sortedNodes.filter(node => Number(node.data("inDegree") ?? 0) > 0);
+  const selected = candidates.slice(0, sanitizedCount);
+  const selectedIds = new Set(selected.map(node => node.id()));
+  const selectedDirs = new Set(selected.map(node => String(node.data("dir") ?? "")));
+
+  cy.batch(() => {
+    cy.nodes().forEach(node => {
+      if (node.hasClass("twinkle-star")) {
+        const starDir = String(node.data("dir") ?? "");
+        node.toggleClass("bottleneck-hidden", !selectedDirs.has(starDir));
+        return;
+      }
+      node.toggleClass("bottleneck-hidden", !selectedIds.has(node.id()));
+    });
+    cy.edges().forEach(edge => {
+      const sourceId = edge.source().id();
+      const targetId = edge.target().id();
+      edge.toggleClass("bottleneck-hidden", !(selectedIds.has(sourceId) && selectedIds.has(targetId)));
+    });
+  });
+
+  if (selected.length > 0) {
+    let selectedCollection = cy.collection();
+    selected.forEach(node => {
+      selectedCollection = selectedCollection.union(node);
+    });
+    cy.fit(selectedCollection, 70);
+    setStatus(`Showing top ${selected.length} depended-on file(s) by incoming dependencies.`);
+  } else {
+    setStatus("No depended-on files were found to filter.");
+  }
+}
+
 function normalizeText(value: string): string {
   return value.toLowerCase().replace(/\\/g, "/");
 }
@@ -200,6 +258,7 @@ function matchesQuery(path: string, query: string): boolean {
 
 sampleButton.addEventListener("click", () => {
   reloadViewer(normalizeSampleGraph(graph));
+  clearBottleneckFilter();
   setStatus("Loaded sample graph.");
   renderDetails(null);
 });
@@ -213,6 +272,7 @@ fileInput.addEventListener("change", async event => {
   try {
     const analyzed = await createGraphFromZip(file);
     reloadViewer(analyzed);
+    clearBottleneckFilter();
     setStatus(
       `Loaded ${analyzed.nodes.length} files, ${analyzed.edges.length} edges. ` +
       `Unresolved imports: ${analyzed.unresolvedImports.length}`
@@ -227,17 +287,33 @@ fileInput.addEventListener("change", async event => {
 focusButton.addEventListener("click", () => {
   const query = searchInput.value.trim();
   const nodes = cy.nodes();
+  const searchableNodes = nodes.filter(node => !node.hasClass("twinkle-star"));
+
+  nodes.removeClass("dimmed");
+  cy.edges().removeClass("dimmed");
+
   if (!query) {
-    nodes.removeClass("dimmed");
-    cy.edges().removeClass("dimmed");
     setStatus("Filter cleared.");
     return;
   }
 
-  const matches = nodes.filter(node => {
+  let matches = searchableNodes.filter(node => {
     const path = String(node.data("path"));
-    return matchesQuery(path, query);
+    return !node.hasClass("bottleneck-hidden") && matchesQuery(path, query);
   });
+
+  let revealedFromBottleneckFilter = false;
+  const hasActiveBottleneckFilter =
+    cy.nodes(".bottleneck-hidden").length > 0 || cy.edges(".bottleneck-hidden").length > 0;
+
+  if (matches.length === 0 && hasActiveBottleneckFilter) {
+    clearBottleneckFilter();
+    revealedFromBottleneckFilter = true;
+    matches = searchableNodes.filter(node => {
+      const path = String(node.data("path"));
+      return matchesQuery(path, query);
+    });
+  }
 
   nodes.addClass("dimmed");
   cy.edges().addClass("dimmed");
@@ -247,10 +323,28 @@ focusButton.addEventListener("click", () => {
 
   if (matches.length > 0) {
     cy.fit(matches, 70);
-    setStatus(`Focused ${matches.length} node(s) for "${query}".`);
+    if (revealedFromBottleneckFilter) {
+      setStatus(`Revealed filtered nodes and focused ${matches.length} node(s) for "${query}".`);
+    } else {
+      setStatus(`Focused ${matches.length} node(s) for "${query}".`);
+    }
   } else {
     setStatus(`No files matched "${query}". Try filename-only like "userService".`);
   }
+});
+
+applyBottleneckFilterButton.addEventListener("click", () => {
+  const requested = Number(bottleneckCountInput.value);
+  const fallback = 10;
+  const count = Number.isFinite(requested) && requested > 0 ? requested : fallback;
+  bottleneckCountInput.value = `${Math.max(1, Math.floor(count))}`;
+  applyBottleneckFilter(count);
+  renderDetails(null);
+});
+
+clearBottleneckFilterButton.addEventListener("click", () => {
+  clearBottleneckFilter();
+  setStatus("Bottleneck filter cleared.");
 });
 
 playGalaxyEntryAnimation();

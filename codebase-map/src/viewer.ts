@@ -37,6 +37,14 @@ function scaleSize(value: number, min: number, max: number, outMin: number, outM
   return outMin + t * (outMax - outMin);
 }
 
+function percentile(values: number[], ratio: number): number {
+  if (values.length === 0) return 0;
+  const sorted = [...values].sort((a, b) => a - b);
+  const clamped = Math.max(0, Math.min(1, ratio));
+  const index = Math.min(sorted.length - 1, Math.floor(clamped * (sorted.length - 1)));
+  return sorted[index];
+}
+
 function hashText(text: string): number {
   let h = 0;
   for (let i = 0; i < text.length; i += 1) {
@@ -112,6 +120,7 @@ function buildClusterStarElements(
       stars.push({
         data: {
           id: `star::${dir}::${i}`,
+          dir,
           color: starPalette[colorIndex],
           sizePx: `${size}`,
           baseOpacity: `${baseOpacity}`,
@@ -136,11 +145,25 @@ export function createViewer(options: CreateViewerOptions): Core {
   const positions = getDirectoryClusterPositions(graph.nodes);
   const minSize = Math.min(...graph.nodes.map(n => n.sizeBytes), 0);
   const maxSize = Math.max(...graph.nodes.map(n => n.sizeBytes), 1);
+  const couplingValues = graph.nodes.map(node => node.inDegree + node.outDegree);
+  const riskValues = graph.nodes.map(node => node.riskScore);
+  const highCouplingThreshold = percentile(couplingValues, 0.8);
+  const criticalRiskThreshold = percentile(riskValues, 0.85);
   const starElements = buildClusterStarElements(graph.nodes, positions);
 
   const elements = [
     ...starElements,
     ...graph.nodes.map(node => ({
+      classes: [
+        node.inDegree + node.outDegree > 0 && node.inDegree + node.outDegree >= highCouplingThreshold
+          ? "high-coupling"
+          : "",
+        node.riskScore > 0 && node.riskScore >= criticalRiskThreshold
+          ? "critical-node"
+          : ""
+      ]
+        .filter(Boolean)
+        .join(" "),
       data: {
         id: node.id,
         label: node.path.split("/").pop() ?? node.id,
@@ -151,6 +174,10 @@ export function createViewer(options: CreateViewerOptions): Core {
         riskScore: node.riskScore,
         inDegree: node.inDegree,
         outDegree: node.outDegree,
+        coupling: node.inDegree + node.outDegree,
+        isHighCoupling:
+          node.inDegree + node.outDegree > 0 && node.inDegree + node.outDegree >= highCouplingThreshold,
+        isCritical: node.riskScore > 0 && node.riskScore >= criticalRiskThreshold,
         sizeBytes: node.sizeBytes,
         color: dirColor(node.dir),
         sizePx: `${scaleSize(node.sizeBytes, minSize, maxSize, 22, 72)}`
@@ -216,6 +243,30 @@ export function createViewer(options: CreateViewerOptions): Core {
         }
       },
       {
+        selector: "node.high-coupling:not(.twinkle-star)",
+        style: {
+          "border-color": "#ffd84d",
+          "border-width": 3.8,
+          "border-style": "dashed"
+        }
+      },
+      {
+        selector: "node.critical-node:not(.twinkle-star)",
+        style: {
+          "border-style": "solid",
+          "border-width": 4.2,
+          "border-color": "#ff3b3b"
+        }
+      },
+      {
+        selector: "node.high-coupling.critical-node:not(.twinkle-star)",
+        style: {
+          "border-style": "solid",
+          "border-color": "#ff3b3b",
+          "border-width": 4.2
+        }
+      },
+      {
         selector: "node.twinkle-star",
         style: {
           label: "",
@@ -257,8 +308,14 @@ export function createViewer(options: CreateViewerOptions): Core {
           opacity: 0.14,
           "text-opacity": 0.18
         }
+      },
+      {
+        selector: ".bottleneck-hidden",
+        style: {
+          display: "none"
+        }
       }
-    ],
+    ] as any,
     // Use preset to keep nodes grouped by directory clusters from getDirectoryClusterPositions.
     layout: {
       name: "preset",

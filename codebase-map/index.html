@@ -1,54 +1,77 @@
 <!doctype html>
 <html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <link rel="icon" type="image/png" href="/src/assets/code-city-graph-icon.png" />
-  <title>CodeCityGraph</title>
-</head>
-<body>
-  <div id="app">
-    <div id="legend">
-      <div class="legend-header">
-        <img
-          class="legend-logo"
-          src="/src/assets/code-city-graph-icon.png"
-          alt="CodeCityGraph logo"
-        />
-        <h2>Codebase Map</h2>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link
+      rel="icon"
+      type="image/png"
+      href="/src/assets/code-city-graph-icon.png"
+    />
+    <title>CodeCityGraph</title>
+  </head>
+  <body>
+    <div id="app">
+      <div id="legend">
+        <div class="legend-header">
+          <img
+            class="legend-logo"
+            src="/src/assets/code-city-graph-icon.png"
+            alt="CodeCityGraph logo"
+          />
+          <h2>Codebase Map</h2>
+        </div>
+        <p class="muted">Sprint 1 Integration + QA Workspace</p>
+
+        <label for="repoZipInput"><strong>Load Repo Zip</strong></label>
+        <input id="repoZipInput" type="file" accept=".zip" />
+        <button id="loadSample" type="button">Load Sample</button>
+
+        <hr />
+
+        <label for="searchInput"><strong>Search + Focus</strong></label>
+        <div class="row">
+          <input
+            id="searchInput"
+            type="text"
+            placeholder="src/service/user.ts"
+          />
+          <button id="focusButton" type="button">Focus</button>
+        </div>
+
+        <label for="bottleneckCount"><strong>Bottleneck Filter</strong></label>
+        <div class="row">
+          <input
+            id="bottleneckCount"
+            type="number"
+            min="1"
+            step="1"
+            value="10"
+          />
+          <button id="applyBottleneckFilter" type="button">Show Top</button>
+          <button id="clearBottleneckFilter" type="button">Clear</button>
+        </div>
+
+        <p id="status" class="status">Loaded sample graph.</p>
+
+        <hr />
+
+        <h3>Legend</h3>
+        <p>Node: file</p>
+        <p>Node size: file size</p>
+        <p>Color: directory cluster</p>
+        <p>Yellow dashed outline: highly coupled file</p>
+        <p>Red solid outline: critical file</p>
+        <p>Edge: import dependency</p>
+
+        <h3 id="detailsHeader">Details</h3>
+        <div id="details">
+          <p>Select a node to inspect details.</p>
+        </div>
       </div>
-      <p class="muted">Sprint 1 Integration + QA Workspace</p>
-
-      <label for="repoZipInput"><strong>Load Repo Zip</strong></label>
-      <input id="repoZipInput" type="file" accept=".zip" />
-      <button id="loadSample" type="button">Load Sample</button>
-
-      <hr />
-
-      <label for="searchInput"><strong>Search + Focus</strong></label>
-      <div class="row">
-        <input id="searchInput" type="text" placeholder="src/service/user.ts" />
-        <button id="focusButton" type="button">Focus</button>
-      </div>
-
-      <p id="status" class="status">Loaded sample graph.</p>
-
-      <hr />
-
-      <h3>Legend</h3>
-      <p>Node: file</p>
-      <p>Node size: file size</p>
-      <p>Color: directory cluster</p>
-      <p>Edge: import dependency</p>
-
-      <h3 id="detailsHeader">Details</h3>
-      <div id="details">
-        <p>Select a node to inspect details.</p>
-      </div>
+      <div id="cy"></div>
     </div>
-    <div id="cy"></div>
-  </div>
 
-  <script type="module" src="/src/main.ts"></script>
-</body>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
 </html>
