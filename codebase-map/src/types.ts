@@ -30,7 +30,6 @@ export interface GraphData {
 
 export interface AnalyzerConfig {
   ignoredDirs: string[];
-  allowExtensions: string[];
   riskWeights: {
     inDegree: number;
     outDegree: number;
