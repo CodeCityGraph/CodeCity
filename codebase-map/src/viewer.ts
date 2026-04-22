@@ -1,6 +1,6 @@
 import cytoscape, { type Core } from "cytoscape";
 import { getDirectoryClusterPositions } from "./layout";
-import type { GraphData } from "./types";
+import type { GraphData, GraphNode } from "./types";
 
 interface CreateViewerOptions {
   container?: HTMLElement;
@@ -57,6 +57,35 @@ function seededUnit(seed: string): number {
   return (hashText(seed) % 10000) / 10000;
 }
 
+function getNodeClasses(nodes: GraphNode[]): Map<string, string> {
+  const classes = new Map<string, string>();
+  const sourceNodes = nodes.filter(node => node.category === "source");
+  const riskValues = sourceNodes.map(node => node.riskScore);
+  const inDegreeValues = sourceNodes.map(node => node.inDegree);
+  const criticalRiskThreshold = percentile(riskValues, 0.9);
+  const warningRiskThreshold = percentile(riskValues, 0.75);
+  const criticalInDegreeThreshold = percentile(inDegreeValues, 0.9);
+  const warningInDegreeThreshold = percentile(inDegreeValues, 0.75);
+
+  nodes.forEach(node => {
+    if (node.category === "external") {
+      classes.set(node.id, "external-node");
+      return;
+    }
+    if (node.riskScore >= criticalRiskThreshold || node.inDegree >= criticalInDegreeThreshold) {
+      classes.set(node.id, "source-node critical-node");
+      return;
+    }
+    if (node.riskScore >= warningRiskThreshold || node.inDegree >= warningInDegreeThreshold) {
+      classes.set(node.id, "source-node warning-node");
+      return;
+    }
+    classes.set(node.id, "source-node");
+  });
+
+  return classes;
+}
+
 function buildClusterStarElements(
   nodes: GraphData["nodes"],
   positions: Record<string, Point>
@@ -65,6 +94,7 @@ function buildClusterStarElements(
   const byDir = new Map<string, GraphData["nodes"]>();
 
   nodes.forEach(node => {
+    if (node.category !== "source") return;
     const group = byDir.get(node.dir) ?? [];
     group.push(node);
     byDir.set(node.dir, group);
@@ -143,22 +173,28 @@ function buildClusterStarElements(
 export function createViewer(options: CreateViewerOptions): Core {
   const { container, graph, onNodeSelect, headless = false } = options;
   const positions = getDirectoryClusterPositions(graph.nodes);
-  const minSize = Math.min(...graph.nodes.map(n => n.sizeBytes), 0);
-  const maxSize = Math.max(...graph.nodes.map(n => n.sizeBytes), 1);
-  const couplingValues = graph.nodes.map(node => node.inDegree + node.outDegree);
-  const riskValues = graph.nodes.map(node => node.riskScore);
+  const nodeClasses = getNodeClasses(graph.nodes);
+  const sourceNodes = graph.nodes.filter(node => node.category === "source");
+  const sourceSizes = graph.nodes
+    .filter(node => node.category === "source")
+    .map(node => node.sizeBytes);
+  const couplingValues = sourceNodes.map(node => node.inDegree + node.outDegree);
+  const riskValues = sourceNodes.map(node => node.riskScore);
   const highCouplingThreshold = percentile(couplingValues, 0.8);
   const criticalRiskThreshold = percentile(riskValues, 0.85);
+  const minSize = sourceSizes.length > 0 ? Math.min(...sourceSizes) : 0;
+  const maxSize = sourceSizes.length > 0 ? Math.max(...sourceSizes) : 1;
   const starElements = buildClusterStarElements(graph.nodes, positions);
 
   const elements = [
     ...starElements,
     ...graph.nodes.map(node => ({
       classes: [
-        node.inDegree + node.outDegree > 0 && node.inDegree + node.outDegree >= highCouplingThreshold
+        nodeClasses.get(node.id) ?? "",
+        node.category === "source" && node.inDegree + node.outDegree > 0 && node.inDegree + node.outDegree >= highCouplingThreshold
           ? "high-coupling"
           : "",
-        node.riskScore > 0 && node.riskScore >= criticalRiskThreshold
+        node.category === "source" && node.riskScore > 0 && node.riskScore >= criticalRiskThreshold
           ? "critical-node"
           : ""
       ]
@@ -166,21 +202,24 @@ export function createViewer(options: CreateViewerOptions): Core {
         .join(" "),
       data: {
         id: node.id,
-        label: node.path.split("/").pop() ?? node.id,
+        label: node.category === "external" ? node.path : (node.path.split("/").pop() ?? node.id),
         path: node.path,
         dir: node.dir,
         ext: node.ext,
+        category: node.category,
         loc: node.loc,
         riskScore: node.riskScore,
         inDegree: node.inDegree,
         outDegree: node.outDegree,
         coupling: node.inDegree + node.outDegree,
         isHighCoupling:
-          node.inDegree + node.outDegree > 0 && node.inDegree + node.outDegree >= highCouplingThreshold,
-        isCritical: node.riskScore > 0 && node.riskScore >= criticalRiskThreshold,
+          node.category === "source" && node.inDegree + node.outDegree > 0 && node.inDegree + node.outDegree >= highCouplingThreshold,
+        isCritical: node.category === "source" && node.riskScore > 0 && node.riskScore >= criticalRiskThreshold,
         sizeBytes: node.sizeBytes,
         color: dirColor(node.dir),
-        sizePx: `${scaleSize(node.sizeBytes, minSize, maxSize, 22, 72)}`
+        sizePx: node.category === "external"
+          ? "24"
+          : `${scaleSize(node.sizeBytes, minSize, maxSize, 22, 72)}`
       },
       position: positions[node.id]
     })),
@@ -189,8 +228,10 @@ export function createViewer(options: CreateViewerOptions): Core {
         id: `${edge.source}-->${edge.target}`,
         source: edge.source,
         target: edge.target,
-        type: edge.type
-      }
+        type: edge.type,
+        scope: edge.scope
+      },
+      classes: `${edge.type === "dynamic-import" ? "edge-dynamic" : "edge-static"} ${edge.scope === "external" ? "scope-external" : "scope-internal"}`
     }))
   ];
 
@@ -198,9 +239,9 @@ export function createViewer(options: CreateViewerOptions): Core {
     container,
     headless,
     elements,
-    style: [
+    style: ([
       {
-        selector: "node:not(.twinkle-star)",
+        selector: "node.source-node",
         style: {
           label: "data(label)",
           "background-color": "data(color)",
@@ -232,6 +273,53 @@ export function createViewer(options: CreateViewerOptions): Core {
           "transition-property": "border-width, border-color, shadow-blur, shadow-opacity, shadow-color, outline-width, outline-color",
           "transition-duration": "0.3s",
           "transition-timing-function": "ease-out"
+        }
+      },
+      {
+        selector: "node.warning-node",
+        style: {
+          "border-width": 3.25,
+          "border-color": "#ffe27d",
+          "shadow-color": "#f5bc42",
+          "shadow-opacity": 0.92,
+          "shadow-blur": 34
+        }
+      },
+      {
+        selector: "node.critical-node",
+        style: {
+          "border-width": 4.5,
+          "border-color": "#ff6a8e",
+          "shadow-color": "#ff4a7a",
+          "shadow-opacity": 1,
+          "shadow-blur": 42
+        }
+      },
+      {
+        selector: "node.external-node",
+        style: {
+          label: "data(label)",
+          width: "data(sizePx)",
+          height: "data(sizePx)",
+          shape: "round-rectangle",
+          "background-color": "#ffb366",
+          "border-width": 2.2,
+          "border-color": "#ffe8d2",
+          "border-opacity": 0.95,
+          "font-size": 10,
+          color: "#fef8f1",
+          "font-weight": 700,
+          "text-wrap": "wrap",
+          "text-max-width": "120",
+          "text-valign": "top",
+          "text-halign": "center",
+          "text-margin-y": -11,
+          "text-background-color": "rgba(55, 21, 2, 0.72)",
+          "text-background-opacity": 1,
+          "text-background-padding": "3",
+          "shadow-color": "#ff9f43",
+          "shadow-opacity": 0.78,
+          "shadow-blur": 20
         }
       },
       {
@@ -303,6 +391,55 @@ export function createViewer(options: CreateViewerOptions): Core {
         }
       },
       {
+        selector: "edge.edge-dynamic",
+        style: {
+          "line-style": "dashed",
+          width: 2.1
+        }
+      },
+      {
+        selector: "edge.scope-external",
+        style: {
+          "line-color": "#ffbf7a",
+          "target-arrow-color": "#ffd3a0",
+          "shadow-color": "#ff9f43",
+          opacity: 0.9
+        }
+      },
+      {
+        selector: "edge.edge-incoming",
+        style: {
+          width: 3,
+          "line-color": "#75d6ff",
+          "target-arrow-color": "#9ee8ff",
+          opacity: 1
+        }
+      },
+      {
+        selector: "edge.edge-outgoing",
+        style: {
+          width: 3,
+          "line-color": "#ff8fca",
+          "target-arrow-color": "#ffb2dc",
+          opacity: 1
+        }
+      },
+      {
+        selector: "node.focus-primary",
+        style: {
+          "z-index": 999,
+          "border-color": "#ffffff",
+          "shadow-blur": 44
+        }
+      },
+      {
+        selector: "node.focus-secondary",
+        style: {
+          "border-color": "#9ae8ff",
+          "border-width": 3.5
+        }
+      },
+      {
         selector: ".dimmed",
         style: {
           opacity: 0.14,
@@ -315,7 +452,7 @@ export function createViewer(options: CreateViewerOptions): Core {
           display: "none"
         }
       }
-    ] as any,
+    ] as any),
     // Use preset to keep nodes grouped by directory clusters from getDirectoryClusterPositions.
     layout: {
       name: "preset",
