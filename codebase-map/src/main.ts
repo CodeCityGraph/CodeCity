@@ -94,9 +94,6 @@ const loadGithubRepoButton = requiredElement<HTMLButtonElement>("loadGithubRepo"
 const sampleButton = requiredElement<HTMLButtonElement>("loadSample");
 const searchInput = requiredElement<HTMLInputElement>("searchInput");
 const focusButton = requiredElement<HTMLButtonElement>("focusButton");
-const bottleneckCountInput = requiredElement<HTMLInputElement>("bottleneckCount");
-const applyBottleneckFilterButton = requiredElement<HTMLButtonElement>("applyBottleneckFilter");
-const clearBottleneckFilterButton = requiredElement<HTMLButtonElement>("clearBottleneckFilter");
 const topDependedRange = requiredElement<HTMLInputElement>("topDependedRange");
 const topDependedValue = requiredElement<HTMLParagraphElement>("topDependedValue");
 const neighborhoodSelect = requiredElement<HTMLSelectElement>("neighborhoodSelect");
@@ -402,9 +399,7 @@ let cy = createViewer({
 function applyFilters(options: { fit?: boolean } = {}): { visibleCount: number; matchedSearchCount: number } {
   const { fit = false } = options;
 
-  const nodes = cy
-    .nodes()
-    .filter(node => !node.hasClass("twinkle-star") && !node.hasClass("bottleneck-hidden"));
+  const nodes = cy.nodes().filter(node => !node.hasClass("twinkle-star"));
   const edges = cy.edges();
 
   nodes.removeClass("dimmed focus-primary focus-secondary");
@@ -515,6 +510,13 @@ function applyFilters(options: { fit?: boolean } = {}): { visibleCount: number; 
 
 function renderDetails(nodeId: string | null): void {
   currentSelectedNodeId = nodeId;
+  cy.nodes().unselect();
+  if (nodeId) {
+    const selected = cy.getElementById(nodeId);
+    if (!selected.empty()) {
+      selected.select();
+    }
+  }
   applyFilters();
 
   const requestId = ++detailsRequestCounter;
@@ -567,68 +569,8 @@ function reloadViewer(nextGraph: GraphData): void {
   playGalaxyEntryAnimation();
 }
 
-function clearBottleneckFilter(): void {
-  cy.nodes().removeClass("bottleneck-hidden");
-  cy.edges().removeClass("bottleneck-hidden");
-  applyFilters();
-}
-
-function applyBottleneckFilter(count: number): void {
-  const sanitizedCount = Math.max(1, Math.floor(count));
-  const sourceNodes = cy
-    .nodes()
-    .filter(node => !node.hasClass("twinkle-star") && node.data("category") === "source")
-    .toArray()
-    .sort((a, b) => {
-      const byIncoming = Number(b.data("inDegree") ?? 0) - Number(a.data("inDegree") ?? 0);
-      if (byIncoming !== 0) return byIncoming;
-      return Number(b.data("outDegree") ?? 0) - Number(a.data("outDegree") ?? 0);
-    });
-
-  const candidates = sourceNodes.filter(node => Number(node.data("inDegree") ?? 0) > 0);
-  const selected = candidates.slice(0, sanitizedCount);
-  const selectedIds = new Set(selected.map(node => node.id()));
-  const selectedDirs = new Set(selected.map(node => String(node.data("dir") ?? "")));
-
-  cy.batch(() => {
-    cy.nodes().forEach(node => {
-      if (node.hasClass("twinkle-star")) {
-        const starDir = String(node.data("dir") ?? "");
-        node.toggleClass("bottleneck-hidden", !selectedDirs.has(starDir));
-        return;
-      }
-
-      if (node.data("category") === "external") {
-        const connectedToSelected = node.connectedEdges().toArray().some(edge => {
-          const sourceId = edge.source().id();
-          const targetId = edge.target().id();
-          return selectedIds.has(sourceId) || selectedIds.has(targetId);
-        });
-        node.toggleClass("bottleneck-hidden", !connectedToSelected);
-        return;
-      }
-
-      node.toggleClass("bottleneck-hidden", !selectedIds.has(node.id()));
-    });
-
-    cy.edges().forEach(edge => {
-      const sourceHidden = edge.source().hasClass("bottleneck-hidden");
-      const targetHidden = edge.target().hasClass("bottleneck-hidden");
-      edge.toggleClass("bottleneck-hidden", sourceHidden || targetHidden);
-    });
-  });
-
-  const result = applyFilters({ fit: selected.length > 0 });
-  if (selected.length > 0) {
-    setStatus(`Showing top ${selected.length} depended-on file(s). Visible nodes: ${result.visibleCount}.`);
-  } else {
-    setStatus("No depended-on source files were found to filter.");
-  }
-}
-
 sampleButton.addEventListener("click", () => {
   reloadViewer(normalizeSampleGraph(graph));
-  clearBottleneckFilter();
   setStatus("Loaded sample graph.");
 });
 
@@ -641,7 +583,6 @@ fileInput.addEventListener("change", async event => {
   try {
     const analyzed = await createGraphFromZip(file);
     reloadViewer(analyzed);
-    clearBottleneckFilter();
     setStatus(
       `Loaded ${analyzed.nodes.length} nodes, ${analyzed.edges.length} edges. ` +
       `Unresolved relative imports: ${analyzed.unresolvedImports.length}`
@@ -650,20 +591,6 @@ fileInput.addEventListener("change", async event => {
     const message = error instanceof Error ? error.message : "Unknown error";
     setStatus(`Failed to analyze zip: ${message}`);
   }
-});
-
-applyBottleneckFilterButton.addEventListener("click", () => {
-  const requested = Number(bottleneckCountInput.value);
-  const fallback = 10;
-  const count = Number.isFinite(requested) && requested > 0 ? requested : fallback;
-  bottleneckCountInput.value = `${Math.max(1, Math.floor(count))}`;
-  applyBottleneckFilter(count);
-  renderDetails(null);
-});
-
-clearBottleneckFilterButton.addEventListener("click", () => {
-  clearBottleneckFilter();
-  setStatus("Bottleneck filter cleared.");
 });
 
 loadGithubRepoButton.addEventListener("click", async () => {

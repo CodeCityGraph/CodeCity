@@ -42,13 +42,6 @@
         <p id="topDependedValue" class="muted-inline">Showing top 100% by in-degree.</p>
       </div>
 
-      <label for="bottleneckCount"><strong>Bottleneck Filter</strong></label>
-      <div class="row">
-        <input id="bottleneckCount" type="number" min="1" step="1" value="10" />
-        <button id="applyBottleneckFilter" type="button">Show Top</button>
-        <button id="clearBottleneckFilter" type="button">Clear</button>
-      </div>
-
       <label for="neighborhoodSelect"><strong>Selected Node Neighborhood</strong></label>
       <select id="neighborhoodSelect">
         <option value="0">Off</option>
@@ -83,8 +76,6 @@
       <p>Color: directory cluster</p>
       <p>Pink glow: critical/highly depended-on file</p>
       <p>Yellow glow: medium architectural risk</p>
-      <p>Yellow dashed outline: highly coupled file</p>
-      <p>Red solid outline: critical file</p>
       <p>Dashed edge: dynamic import</p>
       <p>Orange edge: external dependency</p>
 
@@ -92,8 +83,9 @@
       <div id="details">
         <p>Select a node to inspect details.</p>
       </div>
-      <div id="cy"></div>
     </div>
+
+    <div id="cy"></div>
 
     <script type="module" src="/src/main.ts"></script>
   </body>

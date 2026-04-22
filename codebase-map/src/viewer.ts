@@ -178,9 +178,7 @@ export function createViewer(options: CreateViewerOptions): Core {
   const sourceSizes = graph.nodes
     .filter(node => node.category === "source")
     .map(node => node.sizeBytes);
-  const couplingValues = sourceNodes.map(node => node.inDegree + node.outDegree);
   const riskValues = sourceNodes.map(node => node.riskScore);
-  const highCouplingThreshold = percentile(couplingValues, 0.8);
   const criticalRiskThreshold = percentile(riskValues, 0.85);
   const minSize = sourceSizes.length > 0 ? Math.min(...sourceSizes) : 0;
   const maxSize = sourceSizes.length > 0 ? Math.max(...sourceSizes) : 1;
@@ -191,9 +189,6 @@ export function createViewer(options: CreateViewerOptions): Core {
     ...graph.nodes.map(node => ({
       classes: [
         nodeClasses.get(node.id) ?? "",
-        node.category === "source" && node.inDegree + node.outDegree > 0 && node.inDegree + node.outDegree >= highCouplingThreshold
-          ? "high-coupling"
-          : "",
         node.category === "source" && node.riskScore > 0 && node.riskScore >= criticalRiskThreshold
           ? "critical-node"
           : ""
@@ -212,8 +207,6 @@ export function createViewer(options: CreateViewerOptions): Core {
         inDegree: node.inDegree,
         outDegree: node.outDegree,
         coupling: node.inDegree + node.outDegree,
-        isHighCoupling:
-          node.category === "source" && node.inDegree + node.outDegree > 0 && node.inDegree + node.outDegree >= highCouplingThreshold,
         isCritical: node.category === "source" && node.riskScore > 0 && node.riskScore >= criticalRiskThreshold,
         sizeBytes: node.sizeBytes,
         color: dirColor(node.dir),
@@ -331,27 +324,11 @@ export function createViewer(options: CreateViewerOptions): Core {
         }
       },
       {
-        selector: "node.high-coupling:not(.twinkle-star)",
-        style: {
-          "border-color": "#ffd84d",
-          "border-width": 3.8,
-          "border-style": "dashed"
-        }
-      },
-      {
         selector: "node.critical-node:not(.twinkle-star)",
         style: {
           "border-style": "solid",
           "border-width": 4.2,
           "border-color": "#ff3b3b"
-        }
-      },
-      {
-        selector: "node.high-coupling.critical-node:not(.twinkle-star)",
-        style: {
-          "border-style": "solid",
-          "border-color": "#ff3b3b",
-          "border-width": 4.2
         }
       },
       {
@@ -444,12 +421,6 @@ export function createViewer(options: CreateViewerOptions): Core {
         style: {
           opacity: 0.14,
           "text-opacity": 0.18
-        }
-      },
-      {
-        selector: ".bottleneck-hidden",
-        style: {
-          display: "none"
         }
       }
     ] as any),

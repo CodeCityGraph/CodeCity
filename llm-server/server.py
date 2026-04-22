@@ -3,6 +3,7 @@ Local LLM Server for Code Analysis
 Uses Ollama with CodeLlama to analyze code files
 """
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import httpx
@@ -32,6 +33,12 @@ class FileSummaryRequest(BaseModel):
     outgoing: int = 0
     incoming: int = 0
     related_files: list[str] = []
+
+
+class GitHubRepoInput(BaseModel):
+    owner: str
+    repo: str
+    ref: str | None = None
 
 
 @app.get("/")
@@ -69,6 +76,73 @@ async def health_check():
             "ollama": "not running",
             "error": str(e)
         }
+
+
+@app.post("/api/fetch_github_zip")
+async def fetch_github_zip(request: GitHubRepoInput):
+    """
+    Download a GitHub repository as ZIP and return the buffer
+    
+    Args:
+        request: GitHub repository details (owner, repo, ref)
+    
+    Returns:
+        ZIP file buffer
+    """
+    try:
+        owner = request.owner
+        repo = request.repo
+        ref = request.ref or "main"  # Default to main if ref is None or empty
+        
+        # GitHub API to get the default branch if ref is "main" but doesn't exist
+        url = f"https://github.com/{owner}/{repo}/archive/refs/heads/{ref}.zip"
+        
+        logger.info(f"Downloading {owner}/{repo} ref={ref}")
+        
+        async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
+            response = await client.get(url)
+            
+            if response.status_code == 404:
+                # Try default "main" branch if specified ref doesn't exist
+                if ref != "main":
+                    logger.info(f"Ref {ref} not found, trying main branch")
+                    url = f"https://github.com/{owner}/{repo}/archive/refs/heads/main.zip"
+                    response = await client.get(url)
+                
+                if response.status_code == 404:
+                    raise HTTPException(
+                        status_code=404,
+                        detail=f"Repository {owner}/{repo} not found or is private"
+                    )
+            
+            if response.status_code != 200:
+                raise HTTPException(
+                    status_code=response.status_code,
+                    detail=f"Failed to download repository: {response.status_code}"
+                )
+            
+            # Return the ZIP file with appropriate headers
+            return Response(
+                content=response.content,
+                media_type="application/zip",
+                headers={
+                    "Content-Disposition": f"attachment; filename={repo}.zip",
+                    "X-Resolved-Ref": ref
+                }
+            )
+            
+    except httpx.TimeoutException:
+        logger.error("GitHub download timed out")
+        raise HTTPException(
+            status_code=504,
+            detail="GitHub download timed out"
+        )
+    except Exception as e:
+        logger.error(f"Error downloading GitHub repo: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to download repository: {str(e)}"
+        )
 
 
 @app.post("/api/analyze_file")
