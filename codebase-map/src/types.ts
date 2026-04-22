@@ -1,10 +1,13 @@
-export type EdgeType = "import" | "include";
+export type EdgeType = "import" | "dynamic-import";
+export type NodeCategory = "source" | "external";
+export type DependencyScope = "internal" | "external";
 
 export interface GraphNode {
   id: string;
   path: string;
   dir: string;
   ext: string;
+  category: NodeCategory;
   sizeBytes: number;
   loc: number;
   inDegree: number;
@@ -16,6 +19,7 @@ export interface GraphEdge {
   source: string;
   target: string;
   type: EdgeType;
+  scope: DependencyScope;
 }
 
 export interface GraphData {

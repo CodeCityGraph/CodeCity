@@ -1,5 +1,5 @@
 import JSZip from "jszip";
-import type { AnalyzerConfig, GraphData, GraphEdge, GraphNode } from "./types";
+import type { AnalyzerConfig, EdgeType, GraphData, GraphEdge, GraphNode } from "./types";
 
 const defaultConfig: AnalyzerConfig = {
   ignoredDirs: ["node_modules", "dist", "out", ".git", ".output"],
@@ -15,6 +15,11 @@ interface SourceFile {
   path: string;
   content: string;
   sizeBytes: number;
+}
+
+interface ImportSpecifier {
+  specifier: string;
+  edgeType: EdgeType;
 }
 
 function normalizePath(path: string): string {
@@ -43,20 +48,142 @@ function lineCount(content: string): number {
   return content.split(/\r?\n/).length;
 }
 
-function extractJSImportSpecifiers(content: string): string[] {
+function extractJSImportSpecifiers(content: string): ImportSpecifier[] {
   const importFrom = /import\s+[\s\S]*?\s+from\s+["']([^"']+)["']/g;
   const importOnly = /import\s+["']([^"']+)["']/g;
   const requireRe = /require\(\s*["']([^"']+)["']\s*\)/g;
   const dynamicImportRe = /import\(\s*["']([^"']+)["']\s*\)/g;
 
-  const specifiers: string[] = [];
-  for (const regex of [importFrom, importOnly, requireRe, dynamicImportRe]) {
+  const specifiers: ImportSpecifier[] = [];
+  for (const regex of [importFrom, importOnly, requireRe]) {
     let match: RegExpExecArray | null;
     while ((match = regex.exec(content)) !== null) {
-      specifiers.push(match[1]);
+      specifiers.push({
+        specifier: match[1],
+        edgeType: "import"
+      });
     }
   }
+
+  let dynamicMatch: RegExpExecArray | null;
+  while ((dynamicMatch = dynamicImportRe.exec(content)) !== null) {
+    specifiers.push({
+      specifier: dynamicMatch[1],
+      edgeType: "dynamic-import"
+    });
+  }
+
   return specifiers;
+}
+
+function getExternalPackageName(specifier: string): string {
+  const trimmed = specifier.trim().replace(/^node:/, "");
+  const parts = trimmed.split("/");
+  if (trimmed.startsWith("@") && parts.length >= 2) {
+    return `${parts[0]}/${parts[1]}`;
+  }
+  return parts[0] || trimmed;
+}
+
+function upsertExternalNode(nodeMap: Map<string, GraphNode>, packageName: string): string {
+  const nodeId = `external:${packageName}`;
+  if (!nodeMap.has(nodeId)) {
+    nodeMap.set(nodeId, {
+      id: nodeId,
+      path: packageName,
+      dir: "(external)",
+      ext: "",
+      category: "external",
+      sizeBytes: 0,
+      loc: 0,
+      inDegree: 0,
+      outDegree: 0,
+      riskScore: 0
+    });
+  }
+  return nodeId;
+}
+
+function addUniqueEdge(
+  edgeSet: Set<string>,
+  edges: GraphEdge[],
+  source: string,
+  target: string,
+  type: EdgeType,
+  scope: "internal" | "external"
+): void {
+  const key = `${source}::${target}::${type}::${scope}`;
+  if (edgeSet.has(key)) return;
+  edgeSet.add(key);
+  edges.push({
+    source,
+    target,
+    type,
+    scope
+  });
+}
+
+function createSourceNode(path: string, content: string, sizeBytes: number): GraphNode {
+  return {
+    id: path,
+    path,
+    dir: getDir(path),
+    ext: getExt(path),
+    category: "source",
+    sizeBytes,
+    loc: lineCount(content),
+    inDegree: 0,
+    outDegree: 0,
+    riskScore: 0
+  };
+}
+
+function collectIncludedSourceFiles(files: SourceFile[], config: AnalyzerConfig): SourceFile[] {
+  return files.filter(file => shouldIncludePath(file.path, config));
+}
+
+function createSourceNodeMap(files: SourceFile[]): Map<string, GraphNode> {
+  const nodeMap = new Map<string, GraphNode>();
+  for (const file of files) {
+    const path = normalizePath(file.path);
+    if (nodeMap.has(path)) continue;
+    nodeMap.set(path, createSourceNode(path, file.content, file.sizeBytes));
+  }
+  return nodeMap;
+}
+
+function createEdges(
+  sourceFiles: SourceFile[],
+  nodeMap: Map<string, GraphNode>
+): { edges: GraphEdge[]; unresolvedImports: string[] } {
+  const fileSet = new Set(nodeMap.keys());
+  const edgeSet = new Set<string>();
+  const edges: GraphEdge[] = [];
+  const unresolvedImports = new Set<string>();
+
+  for (const file of sourceFiles) {
+    const source = normalizePath(file.path);
+    if (!nodeMap.has(source)) continue;
+
+    const specifiers = extractJSImportSpecifiers(file.content);
+    for (const { specifier, edgeType } of specifiers) {
+      if (specifier.startsWith(".")) {
+        const resolved = resolveRelativeImport(source, specifier, fileSet);
+        if (!resolved) {
+          unresolvedImports.add(`${source} -> ${specifier}`);
+          continue;
+        }
+        addUniqueEdge(edgeSet, edges, source, resolved, edgeType, "internal");
+        continue;
+      }
+
+      const packageName = getExternalPackageName(specifier);
+      const target = upsertExternalNode(nodeMap, packageName);
+      addUniqueEdge(edgeSet, edges, source, target, edgeType, "external");
+    }
+  }
+
+  return { edges, unresolvedImports: Array.from(unresolvedImports) };
 }
 
 function resolveRelativeImport(sourcePath: string, specifier: string, fileSet: Set<string>): string | null {
@@ -118,52 +245,9 @@ export function createGraphFromFiles(files: SourceFile[], partialConfig: Partial
     }
   };
 
-  const included = files.filter(file => shouldIncludePath(file.path, config));
-  const nodeMap = new Map<string, GraphNode>();
-  for (const file of included) {
-    const path = normalizePath(file.path);
-    if (nodeMap.has(path)) continue;
-
-    nodeMap.set(path, {
-      id: path,
-      path,
-      dir: getDir(path),
-      ext: getExt(path),
-      sizeBytes: file.sizeBytes,
-      loc: lineCount(file.content),
-      inDegree: 0,
-      outDegree: 0,
-      riskScore: 0
-    });
-  }
-
-  const fileSet = new Set(nodeMap.keys());
-  const edgeSet = new Set<string>();
-  const edges: GraphEdge[] = [];
-  const unresolvedImports: string[] = [];
-
-  for (const file of included) {
-    const source = normalizePath(file.path);
-    if (!nodeMap.has(source)) continue;
-
-    const specifiers = extractJSImportSpecifiers(file.content);
-    for (const specifier of specifiers) {
-      const resolved = resolveRelativeImport(source, specifier, fileSet);
-      if (!resolved) {
-        unresolvedImports.push(`${source} -> ${specifier}`);
-        continue;
-      }
-
-      const key = `${source}::${resolved}`;
-      if (edgeSet.has(key)) continue;
-      edgeSet.add(key);
-      edges.push({
-        source,
-        target: resolved,
-        type: "import"
-      });
-    }
-  }
+  const sourceFiles = collectIncludedSourceFiles(files, config);
+  const nodeMap = createSourceNodeMap(sourceFiles);
+  const { edges, unresolvedImports } = createEdges(sourceFiles, nodeMap);
 
   for (const edge of edges) {
     const sourceNode = nodeMap.get(edge.source);
@@ -180,8 +264,8 @@ export function createGraphFromFiles(files: SourceFile[], partialConfig: Partial
   return { nodes, edges, unresolvedImports };
 }
 
-export async function createGraphFromZip(zipFile: File): Promise<GraphData> {
-  const zip = await JSZip.loadAsync(zipFile);
+async function createGraphFromZipSource(zipSource: File | ArrayBuffer): Promise<GraphData> {
+  const zip = await JSZip.loadAsync(zipSource);
   const files: SourceFile[] = [];
 
   const entries = Object.entries(zip.files);
@@ -198,4 +282,12 @@ export async function createGraphFromZip(zipFile: File): Promise<GraphData> {
   }
 
   return createGraphFromFiles(files);
+}
+
+export async function createGraphFromZip(zipFile: File): Promise<GraphData> {
+  return createGraphFromZipSource(zipFile);
+}
+
+export async function createGraphFromZipBuffer(zipBuffer: ArrayBuffer): Promise<GraphData> {
+  return createGraphFromZipSource(zipBuffer);
 }
