@@ -21,6 +21,11 @@
 
       <label for="repoZipInput"><strong>Load Repo Zip</strong></label>
       <input id="repoZipInput" type="file" accept=".zip" />
+      <label for="githubRepoInput"><strong>Load Public GitHub Repo</strong></label>
+      <div class="row">
+        <input id="githubRepoInput" type="text" placeholder="https://github.com/owner/repo" />
+        <button id="loadGithubRepo" type="button">Load</button>
+      </div>
       <button id="loadSample" type="button">Load Sample</button>
 
       <hr />
@@ -31,15 +36,48 @@
         <button id="focusButton" type="button">Focus</button>
       </div>
 
+      <label for="topDependedRange"><strong>Most Depended-On Files</strong></label>
+      <div class="stacked-control">
+        <input id="topDependedRange" type="range" min="5" max="100" step="5" value="100" />
+        <p id="topDependedValue" class="muted-inline">Showing top 100% by in-degree.</p>
+      </div>
+
+      <label for="neighborhoodSelect"><strong>Selected Node Neighborhood</strong></label>
+      <select id="neighborhoodSelect">
+        <option value="0">Off</option>
+        <option value="1" selected>1 hop</option>
+        <option value="2">2 hops</option>
+      </select>
+
+      <label for="edgeDirectionSelect"><strong>Edge Direction (Selected Node)</strong></label>
+      <select id="edgeDirectionSelect">
+        <option value="all" selected>All</option>
+        <option value="incoming">Incoming only</option>
+        <option value="outgoing">Outgoing only</option>
+      </select>
+
+      <p class="filter-title"><strong>Dependency Semantics</strong></p>
+      <label class="checkbox-row"><input id="toggleStaticEdges" type="checkbox" checked /> Static imports</label>
+      <label class="checkbox-row"><input id="toggleDynamicEdges" type="checkbox" checked /> Dynamic imports</label>
+      <label class="checkbox-row"><input id="toggleInternalEdges" type="checkbox" checked /> Internal dependencies</label>
+      <label class="checkbox-row"><input id="toggleExternalEdges" type="checkbox" checked /> External dependencies</label>
+
+      <p class="filter-title"><strong>AI Summary</strong></p>
+      <label class="checkbox-row"><input id="toggleLlmSummary" type="checkbox" /> Use local LLM server (optional)</label>
+
       <p id="status" class="status">Loaded sample graph.</p>
 
       <hr />
 
       <h3>Legend</h3>
       <p>Node: file</p>
+      <p>External node: package</p>
       <p>Node size: file size</p>
       <p>Color: directory cluster</p>
-      <p>Edge: import dependency</p>
+      <p>Pink glow: critical/highly depended-on file</p>
+      <p>Yellow glow: medium architectural risk</p>
+      <p>Dashed edge: dynamic import</p>
+      <p>Orange edge: external dependency</p>
 
       <h3 id="detailsHeader">Details</h3>
       <div id="details">
