@@ -417,6 +417,27 @@ export function createViewer(options: CreateViewerOptions): Core {
         }
       },
       {
+        selector: "node.orphan-node",
+        style: {
+          "border-color": "#67e8f9",
+          "border-width": 3.8,
+          "shadow-color": "#67e8f9",
+          "shadow-opacity": 0.95,
+          "shadow-blur": 34
+        }
+      },
+      {
+        selector: "node.god-file-node",
+        style: {
+          "border-color": "#f59e0b",
+          "border-width": 4.4,
+          "border-style": "double",
+          "shadow-color": "#f59e0b",
+          "shadow-opacity": 1,
+          "shadow-blur": 42
+        }
+      },
+      {
         selector: ".dimmed",
         style: {
           opacity: 0.14,
