@@ -65,6 +65,10 @@
       <p class="filter-title"><strong>AI Summary</strong></p>
       <label class="checkbox-row"><input id="toggleLlmSummary" type="checkbox" /> Use local LLM server (optional)</label>
 
+      <p class="filter-title"><strong>Architecture Checks</strong></p>
+      <label class="checkbox-row"><input id="toggleOrphanModules" type="checkbox" /> Show orphan modules only</label>
+      <label class="checkbox-row"><input id="toggleGodFiles" type="checkbox" /> Highlight god files heuristic</label>
+
       <p id="status" class="status">Loaded sample graph.</p>
 
       <hr />
@@ -76,6 +80,8 @@
       <p>Color: directory cluster</p>
       <p>Pink glow: critical/highly depended-on file</p>
       <p>Yellow glow: medium architectural risk</p>
+      <p>Cyan glow: orphan module (no in/out dependencies)</p>
+      <p>Amber glow: god file heuristic (high LOC and high coupling)</p>
       <p>Dashed edge: dynamic import</p>
       <p>Orange edge: external dependency</p>
 
@@ -84,9 +90,9 @@
         <p>Select a node to inspect details.</p>
       </div>
     </div>
-    <div id="cy"></div>
-  </div>
 
-  <script type="module" src="/src/main.ts"></script>
-</body>
+    <div id="cy"></div>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
 </html>

@@ -21,6 +21,8 @@ interface FilterState {
   showDynamicEdges: boolean;
   showInternalEdges: boolean;
   showExternalEdges: boolean;
+  showOrphanModulesOnly: boolean;
+  highlightGodFiles: boolean;
 }
 
 interface GitHubRepoInput {
@@ -37,7 +39,9 @@ const filterState: FilterState = {
   showStaticEdges: true,
   showDynamicEdges: true,
   showInternalEdges: true,
-  showExternalEdges: true
+  showExternalEdges: true,
+  showOrphanModulesOnly: false,
+  highlightGodFiles: false
 };
 
 function normalizeSampleGraph(raw: typeof graph): GraphData {
@@ -103,6 +107,8 @@ const toggleDynamicEdges = requiredElement<HTMLInputElement>("toggleDynamicEdges
 const toggleInternalEdges = requiredElement<HTMLInputElement>("toggleInternalEdges");
 const toggleExternalEdges = requiredElement<HTMLInputElement>("toggleExternalEdges");
 const toggleLlmSummary = requiredElement<HTMLInputElement>("toggleLlmSummary");
+const toggleOrphanModules = requiredElement<HTMLInputElement>("toggleOrphanModules");
+const toggleGodFiles = requiredElement<HTMLInputElement>("toggleGodFiles");
 const statusLabel = requiredElement<HTMLParagraphElement>("status");
 const detailsPanel = requiredElement<HTMLDivElement>("details");
 
@@ -117,7 +123,6 @@ function playGalaxyEntryAnimation(): void {
 function setStatus(text: string): void {
   statusLabel.textContent = text;
 }
-
 function normalizeText(value: string): string {
   return value.toLowerCase().replace(/\\/g, "/");
 }
@@ -294,6 +299,60 @@ function getNeighborhood(nodeId: string, hops: number): Set<string> {
   return visited;
 }
 
+function getOrphanModuleIds(): Set<string> {
+  const orphanIds = new Set<string>();
+  cy
+    .$("node")
+    .filter(node => !node.hasClass("twinkle-star") && node.data("category") === "source")
+    .forEach(node => {
+      const inDegree = Number(node.data("inDegree") ?? 0);
+      const outDegree = Number(node.data("outDegree") ?? 0);
+      if (inDegree === 0 && outDegree === 0) {
+        orphanIds.add(node.id());
+      }
+    });
+  return orphanIds;
+}
+
+function percentile(values: number[], ratio: number): number {
+  if (values.length === 0) return 0;
+  const sorted = [...values].sort((a, b) => a - b);
+  const clamped = Math.max(0, Math.min(1, ratio));
+  const index = Math.min(sorted.length - 1, Math.floor(clamped * (sorted.length - 1)));
+  return sorted[index];
+}
+
+function getGodFileIds(): Set<string> {
+  const sourceNodes = cy
+    .$("node")
+    .filter(node => !node.hasClass("twinkle-star") && node.data("category") === "source")
+    .toArray();
+
+  if (sourceNodes.length === 0) return new Set<string>();
+
+  const locValues = sourceNodes.map(node => Number(node.data("loc") ?? 0));
+  const inDegreeValues = sourceNodes.map(node => Number(node.data("inDegree") ?? 0));
+  const outDegreeValues = sourceNodes.map(node => Number(node.data("outDegree") ?? 0));
+
+  const locThreshold = percentile(locValues, 0.85);
+  const inDegreeThreshold = percentile(inDegreeValues, 0.85);
+  const outDegreeThreshold = percentile(outDegreeValues, 0.85);
+
+  const godIds = new Set<string>();
+  sourceNodes.forEach(node => {
+    const loc = Number(node.data("loc") ?? 0);
+    const inDegree = Number(node.data("inDegree") ?? 0);
+    const outDegree = Number(node.data("outDegree") ?? 0);
+    const hasHighLoc = loc >= locThreshold;
+    const hasHighCoupling = inDegree >= inDegreeThreshold || outDegree >= outDegreeThreshold;
+    if (hasHighLoc && hasHighCoupling) {
+      godIds.add(node.id());
+    }
+  });
+
+  return godIds;
+}
+
 function escapeHtml(value: string): string {
   return value
     .replaceAll("&", "&amp;")
@@ -403,8 +462,16 @@ function applyFilters(options: { fit?: boolean } = {}): { visibleCount: number; 
   const nodes = cy.nodes().filter(node => !node.hasClass("twinkle-star"));
   const edges = cy.edges();
 
-  nodes.removeClass("dimmed focus-primary focus-secondary");
+  nodes.removeClass("dimmed focus-primary focus-secondary orphan-node god-file-node");
   edges.removeClass("dimmed edge-incoming edge-outgoing");
+
+  const orphanIds = getOrphanModuleIds();
+  const godFileIds = getGodFileIds();
+
+  nodes.forEach(node => {
+    if (orphanIds.has(node.id())) node.addClass("orphan-node");
+    if (filterState.highlightGodFiles && godFileIds.has(node.id())) node.addClass("god-file-node");
+  });
 
   let visibleNodeIds = new Set(nodes.map(node => node.id()));
   let matchedSearchCount = 0;
@@ -430,6 +497,10 @@ function applyFilters(options: { fit?: boolean } = {}): { visibleCount: number; 
   if (filterState.topDependedPercent < 100) {
     const topContext = getTopDependedNodeContext(filterState.topDependedPercent);
     visibleNodeIds = intersects(visibleNodeIds, topContext);
+  }
+
+  if (filterState.showOrphanModulesOnly) {
+    visibleNodeIds = intersects(visibleNodeIds, orphanIds);
   }
 
   if (currentSelectedNodeId && filterState.neighborhoodHops > 0) {
@@ -511,6 +582,13 @@ function applyFilters(options: { fit?: boolean } = {}): { visibleCount: number; 
 
 function renderDetails(nodeId: string | null): void {
   currentSelectedNodeId = nodeId;
+  cy.nodes().unselect();
+  if (nodeId) {
+    const selected = cy.getElementById(nodeId);
+    if (!selected.empty()) {
+      selected.select();
+    }
+  }
   applyFilters();
 
   const requestId = ++detailsRequestCounter;
@@ -529,6 +607,9 @@ function renderDetails(nodeId: string | null): void {
        <p id="llm-explanation" data-request-id="${requestId}">Loading from local server...</p>`
     : "<p><strong>Optional LLM Summary:</strong> Disabled. Running fully local without model.</p>";
 
+  const isOrphan = Number(node.data("inDegree") ?? 0) === 0 && Number(node.data("outDegree") ?? 0) === 0;
+  const isGodFile = getGodFileIds().has(nodeId);
+
   detailsPanel.innerHTML = `
     <h4>${escapeHtml(String(node.data("label") ?? nodeId))}</h4>
     <p><strong>Path:</strong> ${escapeHtml(String(node.data("path") ?? nodeId))}</p>
@@ -539,6 +620,8 @@ function renderDetails(nodeId: string | null): void {
     <p><strong>Size:</strong> ${Number(node.data("sizeBytes") ?? 0)} bytes</p>
     <p><strong>In/Out:</strong> ${Number(node.data("inDegree") ?? 0)} / ${Number(node.data("outDegree") ?? 0)}</p>
     <p><strong>Risk:</strong> ${Number(node.data("riskScore") ?? 0).toFixed(2)}</p>
+    <p><strong>Orphan Module:</strong> ${isOrphan ? "Yes" : "No"}</p>
+    <p><strong>God File Heuristic:</strong> ${isGodFile ? "Flagged" : "Not flagged"}</p>
     <p><strong>Heuristic Summary:</strong></p>
     <p>${escapeHtml(heuristicSummary)}</p>
     ${llmSection}
@@ -701,6 +784,26 @@ toggleInternalEdges.addEventListener("change", () => {
 toggleExternalEdges.addEventListener("change", () => {
   clampScopeToggleAtLeastOne();
   applySemanticToggleStatus();
+});
+
+toggleOrphanModules.addEventListener("change", () => {
+  filterState.showOrphanModulesOnly = toggleOrphanModules.checked;
+  const result = applyFilters();
+  setStatus(
+    filterState.showOrphanModulesOnly
+      ? `Orphan-module check enabled. Visible nodes: ${result.visibleCount}.`
+      : `Orphan-module check disabled. Visible nodes: ${result.visibleCount}.`
+  );
+});
+
+toggleGodFiles.addEventListener("change", () => {
+  filterState.highlightGodFiles = toggleGodFiles.checked;
+  const result = applyFilters();
+  setStatus(
+    filterState.highlightGodFiles
+      ? `God-file heuristic highlighting enabled. Visible nodes: ${result.visibleCount}.`
+      : `God-file heuristic highlighting disabled. Visible nodes: ${result.visibleCount}.`
+  );
 });
 
 toggleLlmSummary.addEventListener("change", () => {

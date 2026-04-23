@@ -37,6 +37,14 @@ function scaleSize(value: number, min: number, max: number, outMin: number, outM
   return outMin + t * (outMax - outMin);
 }
 
+function percentile(values: number[], ratio: number): number {
+  if (values.length === 0) return 0;
+  const sorted = [...values].sort((a, b) => a - b);
+  const clamped = Math.max(0, Math.min(1, ratio));
+  const index = Math.min(sorted.length - 1, Math.floor(clamped * (sorted.length - 1)));
+  return sorted[index];
+}
+
 function hashText(text: string): number {
   let h = 0;
   for (let i = 0; i < text.length; i += 1) {
@@ -47,13 +55,6 @@ function hashText(text: string): number {
 
 function seededUnit(seed: string): number {
   return (hashText(seed) % 10000) / 10000;
-}
-
-function percentile(values: number[], q: number): number {
-  if (values.length === 0) return 0;
-  const sorted = [...values].sort((a, b) => a - b);
-  const index = Math.min(sorted.length - 1, Math.max(0, Math.floor((sorted.length - 1) * q)));
-  return sorted[index];
 }
 
 function getNodeClasses(nodes: GraphNode[]): Map<string, string> {
@@ -149,6 +150,7 @@ function buildClusterStarElements(
       stars.push({
         data: {
           id: `star::${dir}::${i}`,
+          dir,
           color: starPalette[colorIndex],
           sizePx: `${size}`,
           baseOpacity: `${baseOpacity}`,
@@ -172,9 +174,12 @@ export function createViewer(options: CreateViewerOptions): Core {
   const { container, graph, onNodeSelect, headless = false } = options;
   const positions = getDirectoryClusterPositions(graph.nodes);
   const nodeClasses = getNodeClasses(graph.nodes);
+  const sourceNodes = graph.nodes.filter(node => node.category === "source");
   const sourceSizes = graph.nodes
     .filter(node => node.category === "source")
     .map(node => node.sizeBytes);
+  const riskValues = sourceNodes.map(node => node.riskScore);
+  const criticalRiskThreshold = percentile(riskValues, 0.85);
   const minSize = sourceSizes.length > 0 ? Math.min(...sourceSizes) : 0;
   const maxSize = sourceSizes.length > 0 ? Math.max(...sourceSizes) : 1;
   const starElements = buildClusterStarElements(graph.nodes, positions);
@@ -182,6 +187,14 @@ export function createViewer(options: CreateViewerOptions): Core {
   const elements = [
     ...starElements,
     ...graph.nodes.map(node => ({
+      classes: [
+        nodeClasses.get(node.id) ?? "",
+        node.category === "source" && node.riskScore > 0 && node.riskScore >= criticalRiskThreshold
+          ? "critical-node"
+          : ""
+      ]
+        .filter(Boolean)
+        .join(" "),
       data: {
         id: node.id,
         label: node.category === "external" ? node.path : (node.path.split("/").pop() ?? node.id),
@@ -193,13 +206,14 @@ export function createViewer(options: CreateViewerOptions): Core {
         riskScore: node.riskScore,
         inDegree: node.inDegree,
         outDegree: node.outDegree,
+        coupling: node.inDegree + node.outDegree,
+        isCritical: node.category === "source" && node.riskScore > 0 && node.riskScore >= criticalRiskThreshold,
         sizeBytes: node.sizeBytes,
         color: dirColor(node.dir),
         sizePx: node.category === "external"
           ? "24"
           : `${scaleSize(node.sizeBytes, minSize, maxSize, 22, 72)}`
       },
-      classes: nodeClasses.get(node.id) ?? "",
       position: positions[node.id]
     })),
     ...graph.edges.map(edge => ({
@@ -310,6 +324,14 @@ export function createViewer(options: CreateViewerOptions): Core {
         }
       },
       {
+        selector: "node.critical-node:not(.twinkle-star)",
+        style: {
+          "border-style": "solid",
+          "border-width": 4.2,
+          "border-color": "#ff3b3b"
+        }
+      },
+      {
         selector: "node.twinkle-star",
         style: {
           label: "",
@@ -392,6 +414,27 @@ export function createViewer(options: CreateViewerOptions): Core {
         style: {
           "border-color": "#9ae8ff",
           "border-width": 3.5
+        }
+      },
+      {
+        selector: "node.orphan-node",
+        style: {
+          "border-color": "#67e8f9",
+          "border-width": 3.8,
+          "shadow-color": "#67e8f9",
+          "shadow-opacity": 0.95,
+          "shadow-blur": 34
+        }
+      },
+      {
+        selector: "node.god-file-node",
+        style: {
+          "border-color": "#f59e0b",
+          "border-width": 4.4,
+          "border-style": "double",
+          "shadow-color": "#f59e0b",
+          "shadow-opacity": 1,
+          "shadow-blur": 42
         }
       },
       {
