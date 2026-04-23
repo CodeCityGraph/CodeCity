@@ -277,14 +277,19 @@ button:disabled {
   background: rgba(22, 29, 68, 0.48);
   border: 1px solid rgba(126, 162, 255, 0.25);
   border-radius: 12px;
-  padding: 8px;
+  padding: 10px;
   margin-top: 4px;
+  max-height: clamp(220px, 42vh, 520px);
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 
 #details p {
   margin: 4px 0;
   line-height: 1.35;
   color: var(--starlight);
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 #details h4 {
@@ -294,6 +299,12 @@ button:disabled {
   color: #c9eeff;
   text-shadow: 0 0 10px rgba(103, 232, 249, 0.35), 0 0 2px rgba(201, 238, 255, 0.9);
   font-size: 15px;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+#llm-explanation {
+  white-space: pre-wrap;
 }
 
 #cy {

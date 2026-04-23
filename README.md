@@ -73,7 +73,7 @@ The frontend is integrated with a local LLM backend for file-level summaries:
 
 - Frontend calls: `http://localhost:8002/api/analyze_file`
 - Backend: FastAPI (`llm-server/server.py`)
-- Model runtime: Ollama with `codellama:7b-instruct`
+- Model runtime: provider-based (`ollama` or `gemini`)
 
 For full backend setup, Ollama install, and troubleshooting steps, see:
 

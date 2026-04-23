@@ -2,10 +2,17 @@ import graph from "./graph.json";
 import { createGraphFromZip, createGraphFromZipBuffer } from "./analyzer";
 import type { GraphData } from "./types";
 import { createViewer } from "./viewer";
+import {
+  exportArchitectureRiskTxt,
+  exportGraphPng,
+  exportMetricsCsv,
+  exportMetricsJson,
+  exportPdfReport
+} from "./reporting";
 import "./style.css";
 
 const LLM_API_URL = "http://localhost:8002";
-const LLM_TIMEOUT_MS = 2200;
+const LLM_TIMEOUT_MS = 10000;
 
 let detailsRequestCounter = 0;
 let currentSelectedNodeId: string | null = null;
@@ -105,6 +112,11 @@ const toggleExternalEdges = requiredElement<HTMLInputElement>("toggleExternalEdg
 const toggleLlmSummary = requiredElement<HTMLInputElement>("toggleLlmSummary");
 const statusLabel = requiredElement<HTMLParagraphElement>("status");
 const detailsPanel = requiredElement<HTMLDivElement>("details");
+const exportPngButton = requiredElement<HTMLButtonElement>("exportPng");
+const exportPdfButton = requiredElement<HTMLButtonElement>("exportPdf");
+const exportJsonButton = requiredElement<HTMLButtonElement>("exportJson");
+const exportCsvButton = requiredElement<HTMLButtonElement>("exportCsv");
+const exportRiskButton = requiredElement<HTMLButtonElement>("exportRisk");
 
 function playGalaxyEntryAnimation(): void {
   appRoot.classList.remove("warp-in");
@@ -388,14 +400,27 @@ async function populateNodeExplanation(nodeId: string, requestId: number): Promi
   if (!target || requestId !== detailsRequestCounter) return;
   target.textContent = llmSummary
     ? llmSummary
-    : "Local LLM unavailable. Heuristic summary above is being used instead.";
+    : "LLM provider unavailable. Heuristic summary above is being used instead.";
 }
+
+const initialGraph = normalizeSampleGraph(graph);
+let currentGraphData: GraphData = initialGraph;
 
 let cy = createViewer({
   container,
-  graph: normalizeSampleGraph(graph),
+  graph: initialGraph,
   onNodeSelect: renderDetails
 });
+
+async function runExport(task: () => void | Promise<void>, successMessage: string): Promise<void> {
+  try {
+    await task();
+    setStatus(successMessage);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unknown export error";
+    setStatus(`Export failed: ${message}`);
+  }
+}
 
 function applyFilters(options: { fit?: boolean } = {}): { visibleCount: number; matchedSearchCount: number } {
   const { fit = false } = options;
@@ -550,6 +575,7 @@ function renderDetails(nodeId: string | null): void {
 }
 
 function reloadViewer(nextGraph: GraphData): void {
+  currentGraphData = nextGraph;
   cy.destroy();
   currentSelectedNodeId = null;
   detailsRequestCounter += 1;
@@ -566,6 +592,26 @@ function reloadViewer(nextGraph: GraphData): void {
 sampleButton.addEventListener("click", () => {
   reloadViewer(normalizeSampleGraph(graph));
   setStatus("Loaded sample graph.");
+});
+
+exportPngButton.addEventListener("click", () => {
+  void runExport(() => exportGraphPng(cy), "Exported PNG snapshot.");
+});
+
+exportPdfButton.addEventListener("click", () => {
+  void runExport(() => exportPdfReport(currentGraphData, cy), "Exported PDF report.");
+});
+
+exportJsonButton.addEventListener("click", () => {
+  void runExport(() => exportMetricsJson(currentGraphData), "Exported JSON metrics.");
+});
+
+exportCsvButton.addEventListener("click", () => {
+  void runExport(() => exportMetricsCsv(currentGraphData), "Exported CSV metrics.");
+});
+
+exportRiskButton.addEventListener("click", () => {
+  void runExport(() => exportArchitectureRiskTxt(currentGraphData), "Exported architecture risk report.");
 });
 
 fileInput.addEventListener("change", async event => {
@@ -711,7 +757,7 @@ toggleLlmSummary.addEventListener("change", () => {
     setStatus("LLM summary disabled. Using local heuristic summaries only.");
     return;
   }
-  setStatus("LLM summary enabled. The app will gracefully fall back if the server is unavailable.");
+  setStatus("LLM summary enabled. The app will gracefully fall back if the provider is unavailable.");
 });
 
 formatTopDependedLabel(filterState.topDependedPercent);

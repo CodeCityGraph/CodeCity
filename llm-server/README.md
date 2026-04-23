@@ -1,8 +1,32 @@
 # Local LLM Server for Code Analysis
 
-This server uses **Ollama** with **CodeLlama** to provide AI-powered code analysis locally, without requiring external API keys.
+This server supports two LLM providers for code analysis:
 
-## Prerequisites
+- `ollama` (default): local CodeLlama or any Ollama model
+- `gemini`: Google Gemini via API key
+
+## Provider Configuration
+
+The server reads provider settings from environment variables:
+
+```bash
+# Required provider selector
+LLM_PROVIDER=ollama   # or gemini
+
+# Optional model override
+LLM_MODEL=codellama:7b-instruct   # ollama example
+# LLM_MODEL=gemini-1.5-flash      # gemini example
+
+# Required only when LLM_PROVIDER=gemini
+GEMINI_API_KEY=your_api_key_here
+```
+
+If unset, the defaults are:
+
+- `LLM_PROVIDER=ollama`
+- `LLM_MODEL=codellama:7b-instruct`
+
+## Prerequisites (Ollama Mode)
 
 ### 1. Install Ollama
 
@@ -38,6 +62,19 @@ ollama list
 
 You should see `codellama:7b-instruct` in the list.
 
+## Prerequisites (Gemini Mode)
+
+1. Create a Gemini API key in Google AI Studio.
+2. Set environment variables before starting the server:
+
+```powershell
+$env:LLM_PROVIDER = "gemini"
+$env:LLM_MODEL = "gemini-1.5-flash"
+$env:GEMINI_API_KEY = "<your-key>"
+```
+
+You can omit `LLM_MODEL` to use the server default for Gemini.
+
 ## Setup
 
 ### Install Python Dependencies
@@ -65,12 +102,23 @@ Visit http://localhost:8002 in your browser or run:
 curl http://localhost:8002/api/health
 ```
 
-Expected response:
+Expected response (Ollama):
 ```json
 {
-  "ollama": "running",
+  "provider": "ollama",
+  "status": "running",
   "model_available": true,
   "model": "codellama:7b-instruct"
+}
+```
+
+Expected response (Gemini):
+```json
+{
+  "provider": "gemini",
+  "status": "configured",
+  "model_available": true,
+  "model": "gemini-1.5-flash"
 }
 ```
 
@@ -113,7 +161,7 @@ Download a public GitHub repository archive server-side (used by frontend GitHub
 
 ### `POST /api/analyze_file`
 
-Analyze a code file using CodeLlama.
+Analyze a code file using the active provider (Ollama or Gemini).
 
 **Request:**
 ```json
@@ -132,7 +180,7 @@ Analyze a code file using CodeLlama.
   "description": "AI-generated summary of the file's purpose and role",
   "complexity": "medium",
   "dependencies": ["utils.ts", "types.ts"],
-  "source": "codellama-local"
+  "source": "gemini:gemini-1.5-flash"
 }
 ```
 
@@ -185,22 +233,27 @@ If you run out of memory:
 - Close other applications
 - Reduce concurrent requests
 
+### Gemini Not Configured
+
+**Error:** Gemini selected but unavailable
+
+**Fix:**
+- Ensure `LLM_PROVIDER=gemini`
+- Ensure `GEMINI_API_KEY` is set in the same shell used to run `python server.py`
+- Check `GET /api/health` response for `status` and `error`
+
 ## Configuration
 
 Edit `server.py` to customize:
 
 ```python
-# Change model
-MODEL_NAME = "codellama:13b-instruct"  # Use larger model
+# Change provider/model through env vars
+LLM_PROVIDER=gemini
+LLM_MODEL=gemini-1.5-flash
+GEMINI_API_KEY=your_key_here
 
 # Change port
 uvicorn.run(app, host="0.0.0.0", port=8002)  # Different port
-
-# Adjust generation parameters
-"options": {
-    "temperature": 0.5,  # Lower = more deterministic
-    "num_predict": 200   # More tokens = longer responses
-}
 ```
 
 ## Performance Tips

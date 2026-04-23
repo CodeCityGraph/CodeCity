@@ -63,9 +63,18 @@
       <label class="checkbox-row"><input id="toggleExternalEdges" type="checkbox" checked /> External dependencies</label>
 
       <p class="filter-title"><strong>AI Summary</strong></p>
-      <label class="checkbox-row"><input id="toggleLlmSummary" type="checkbox" /> Use local LLM server (optional)</label>
+      <label class="checkbox-row"><input id="toggleLlmSummary" type="checkbox" checked /> Use LLM server summary (optional)</label>
 
       <p id="status" class="status">Loaded sample graph.</p>
+
+      <hr />
+
+      <h3>Export</h3>
+      <button id="exportPng" type="button">Export PNG Snapshot</button>
+      <button id="exportPdf" type="button">Export PDF Report</button>
+      <button id="exportJson" type="button">Export JSON Metrics</button>
+      <button id="exportCsv" type="button">Export CSV Metrics</button>
+      <button id="exportRisk" type="button">Export Architecture Risk</button>
 
       <hr />
 
