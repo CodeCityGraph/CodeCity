@@ -1,9 +1,11 @@
 """
-Local LLM Server for Code Analysis
-Uses Ollama with CodeLlama to analyze code files
+Local server for CodeCity integrations:
+- LLM-based file analysis (optional)
+- GitHub archive proxy for repo ingestion
 """
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import Response
+from urllib.parse import quote
+
+from fastapi import FastAPI, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import httpx
@@ -21,6 +23,7 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["X-GitHub-Resolved-Ref"],
 )
 
 # Ollama API endpoint
@@ -35,7 +38,7 @@ class FileSummaryRequest(BaseModel):
     related_files: list[str] = []
 
 
-class GitHubRepoInput(BaseModel):
+class GitHubZipRequest(BaseModel):
     owner: str
     repo: str
     ref: str | None = None
@@ -49,7 +52,8 @@ async def root():
         "model": MODEL_NAME,
         "endpoints": [
             "GET / - Health check",
-            "POST /api/analyze_file - Analyze a code file"
+            "POST /api/analyze_file - Analyze a code file",
+            "POST /api/fetch_github_zip - Download public GitHub repo archive"
         ]
     }
 
@@ -78,73 +82,6 @@ async def health_check():
         }
 
 
-@app.post("/api/fetch_github_zip")
-async def fetch_github_zip(request: GitHubRepoInput):
-    """
-    Download a GitHub repository as ZIP and return the buffer
-    
-    Args:
-        request: GitHub repository details (owner, repo, ref)
-    
-    Returns:
-        ZIP file buffer
-    """
-    try:
-        owner = request.owner
-        repo = request.repo
-        ref = request.ref or "main"  # Default to main if ref is None or empty
-        
-        # GitHub API to get the default branch if ref is "main" but doesn't exist
-        url = f"https://github.com/{owner}/{repo}/archive/refs/heads/{ref}.zip"
-        
-        logger.info(f"Downloading {owner}/{repo} ref={ref}")
-        
-        async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
-            response = await client.get(url)
-            
-            if response.status_code == 404:
-                # Try default "main" branch if specified ref doesn't exist
-                if ref != "main":
-                    logger.info(f"Ref {ref} not found, trying main branch")
-                    url = f"https://github.com/{owner}/{repo}/archive/refs/heads/main.zip"
-                    response = await client.get(url)
-                
-                if response.status_code == 404:
-                    raise HTTPException(
-                        status_code=404,
-                        detail=f"Repository {owner}/{repo} not found or is private"
-                    )
-            
-            if response.status_code != 200:
-                raise HTTPException(
-                    status_code=response.status_code,
-                    detail=f"Failed to download repository: {response.status_code}"
-                )
-            
-            # Return the ZIP file with appropriate headers
-            return Response(
-                content=response.content,
-                media_type="application/zip",
-                headers={
-                    "Content-Disposition": f"attachment; filename={repo}.zip",
-                    "X-Resolved-Ref": ref
-                }
-            )
-            
-    except httpx.TimeoutException:
-        logger.error("GitHub download timed out")
-        raise HTTPException(
-            status_code=504,
-            detail="GitHub download timed out"
-        )
-    except Exception as e:
-        logger.error(f"Error downloading GitHub repo: {str(e)}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to download repository: {str(e)}"
-        )
-
-
 @app.post("/api/analyze_file")
 async def analyze_file(request: FileSummaryRequest):
     """
@@ -161,26 +98,27 @@ async def analyze_file(request: FileSummaryRequest):
         coupling = request.outgoing + request.incoming
         complexity = "high" if coupling >= 12 else "medium" if coupling >= 6 else "low"
         
-        # Extract file metadata
+        # Extract file metadata for prompt context.
         file_name = request.file_path.split('/')[-1]
         extension = file_name.split('.')[-1] if '.' in file_name else 'unknown'
-    #File: {request.file_path}
-#Directory: {request.directory or 'unknown'}
-#Extension: {extension}
-#Outgoing dependencies: {request.outgoing}
-#Incoming dependencies: {request.incoming}
-#Related files: {', '.join(request.related_files[:5]) if request.related_files else 'none'}
-        # Build prompt for CodeLlama
-        prompt = f"""You are a code analyst. Analyze this file based on its metadata and provide a concise 2-34 sentence summary.
+        related_preview = ", ".join(request.related_files[:5]) if request.related_files else "none"
 
+        # Build prompt for CodeLlama.
+        prompt = f"""You are a code analyst.
 
+File: {request.file_path}
+Directory: {request.directory or 'unknown'}
+Extension: {extension}
+Outgoing dependencies: {request.outgoing}
+Incoming dependencies: {request.incoming}
+Related files: {related_preview}
 
-Provide a technical summary describing:
-1. What functions are included in this file
-2. What is the main output of this file
-3. main responsibility of this file
+Write a concise technical summary in 2-4 sentences that covers:
+1. The file's likely responsibilities
+2. How it connects to surrounding files
+3. Why it matters in the codebase
 
-Keep your response concise (2-4 sentences) and technical. Try to avoid generic statements and focus on the specific role of this file in the codebase. Try to avoid "may", "might", "likely", or other forms of uncertainty."""
+Avoid vague language and avoid stating uncertainty."""
 
         # Call Ollama API
         async with httpx.AsyncClient(timeout=30.0) as client:
@@ -238,6 +176,101 @@ Keep your response concise (2-4 sentences) and technical. Try to avoid generic s
             status_code=500,
             detail=f"Failed to generate analysis: {str(e)}"
         )
+
+
+def _encode_ref_for_path(ref: str) -> str:
+    return "/".join(quote(part, safe="") for part in ref.split("/") if part)
+
+
+async def _fetch_default_branch(owner: str, repo: str) -> str | None:
+    url = f"https://api.github.com/repos/{owner}/{repo}"
+    try:
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            response = await client.get(url)
+            if response.status_code != 200:
+                return None
+            payload = response.json()
+            branch = str(payload.get("default_branch", "")).strip()
+            return branch if branch else None
+    except Exception:
+        return None
+
+
+async def _try_fetch_archive(url: str) -> bytes | None:
+    try:
+        async with httpx.AsyncClient(timeout=45.0, follow_redirects=True) as client:
+            response = await client.get(url)
+            if response.status_code == 200:
+                return response.content
+            if response.status_code == 404:
+                return None
+            raise HTTPException(
+                status_code=502,
+                detail=f"GitHub archive request failed ({response.status_code})."
+            )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"GitHub request failed: {exc}") from exc
+
+
+@app.post("/api/fetch_github_zip")
+async def fetch_github_zip(request: GitHubZipRequest):
+    """
+    Server-side GitHub zip fetch to avoid browser-side CORS issues.
+    Supports public repositories only.
+    """
+    owner = request.owner.strip()
+    repo = request.repo.strip().removesuffix(".git")
+    ref = request.ref.strip() if request.ref else None
+
+    if not owner or not repo:
+        raise HTTPException(status_code=400, detail="owner and repo are required.")
+
+    branch_candidates: list[str] = []
+    if ref:
+        branch_candidates.append(ref)
+    else:
+        default_branch = await _fetch_default_branch(owner, repo)
+        if default_branch:
+            branch_candidates.append(default_branch)
+        if "main" not in branch_candidates:
+            branch_candidates.append("main")
+        if "master" not in branch_candidates:
+            branch_candidates.append("master")
+
+    for branch in branch_candidates:
+        encoded = _encode_ref_for_path(branch)
+        branch_url = f"https://codeload.github.com/{owner}/{repo}/zip/refs/heads/{encoded}"
+        zip_bytes = await _try_fetch_archive(branch_url)
+        if zip_bytes:
+            return Response(
+                content=zip_bytes,
+                media_type="application/zip",
+                headers={
+                    "X-GitHub-Resolved-Ref": branch,
+                    "Cache-Control": "no-store",
+                },
+            )
+
+    if ref:
+        encoded_tag = _encode_ref_for_path(ref)
+        tag_url = f"https://codeload.github.com/{owner}/{repo}/zip/refs/tags/{encoded_tag}"
+        tag_zip = await _try_fetch_archive(tag_url)
+        if tag_zip:
+            return Response(
+                content=tag_zip,
+                media_type="application/zip",
+                headers={
+                    "X-GitHub-Resolved-Ref": ref,
+                    "Cache-Control": "no-store",
+                },
+            )
+
+    raise HTTPException(
+        status_code=404,
+        detail=f"Could not fetch archive for {owner}/{repo}. Ensure repository is public and ref exists."
+    )
 
 
 if __name__ == "__main__":

@@ -92,6 +92,25 @@ From repository root, you can run:
 
 ## API Endpoints
 
+### `POST /api/fetch_github_zip`
+
+Download a public GitHub repository archive server-side (used by frontend GitHub URL loader to avoid browser CORS issues).
+
+**Request:**
+```json
+{
+  "owner": "Vaish1405",
+  "repo": "school-smart",
+  "ref": null
+}
+```
+
+`ref` is optional. When omitted, the server tries the default branch, then `main`, then `master`.
+
+**Response:**
+- `200 application/zip` (binary zip content)
+- Response header: `X-GitHub-Resolved-Ref` with the branch/tag that was fetched
+
 ### `POST /api/analyze_file`
 
 Analyze a code file using CodeLlama.
@@ -118,6 +137,18 @@ Analyze a code file using CodeLlama.
 ```
 
 ## Troubleshooting
+
+### GitHub URL Loading Fails in Frontend
+
+If frontend shows GitHub load failure:
+1. Ensure this server is running on `http://localhost:8002`
+2. Verify endpoint directly:
+```bash
+curl -I -X POST http://localhost:8002/api/fetch_github_zip \
+  -H "Content-Type: application/json" \
+  -d "{\"owner\":\"Vaish1405\",\"repo\":\"school-smart\"}"
+```
+3. Confirm the repository is public and accessible.
 
 ### Ollama Not Running
 
