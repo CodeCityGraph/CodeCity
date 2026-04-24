@@ -1,5 +1,5 @@
 import cytoscape, { type Core } from "cytoscape";
-import { getDirectoryClusterPositions } from "./layout";
+import { getDirectoryClusterPositions, getCommunityClusterPositions, type ClusteringMode } from "./layout";
 import type { GraphData, GraphNode } from "./types";
 
 interface CreateViewerOptions {
@@ -7,6 +7,7 @@ interface CreateViewerOptions {
   graph: GraphData;
   onNodeSelect?: (nodeId: string | null) => void;
   headless?: boolean;
+  clusteringMode?: ClusteringMode;
 }
 
 interface Point {
@@ -171,8 +172,13 @@ function buildClusterStarElements(
 }
 
 export function createViewer(options: CreateViewerOptions): Core {
-  const { container, graph, onNodeSelect, headless = false } = options;
-  const positions = getDirectoryClusterPositions(graph.nodes);
+  const { container, graph, onNodeSelect, headless = false, clusteringMode = "directory" } = options;
+  
+  // Select positioning function based on clustering mode
+  const positions = clusteringMode === "community"
+    ? getCommunityClusterPositions(graph.nodes, graph.edges)
+    : getDirectoryClusterPositions(graph.nodes);
+  
   const nodeClasses = getNodeClasses(graph.nodes);
   const sourceNodes = graph.nodes.filter(node => node.category === "source");
   const sourceSizes = graph.nodes
