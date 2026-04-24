@@ -34,6 +34,7 @@
       <div class="row">
         <input id="searchInput" type="text" placeholder="src/service/user.ts" />
         <button id="focusButton" type="button">Focus</button>
+        <button id="resetFiltersButton" type="button">Reset All</button>
       </div>
 
       <label for="topDependedRange"><strong>Most Depended-On Files</strong></label>
@@ -55,6 +56,25 @@
         <option value="incoming">Incoming only</option>
         <option value="outgoing">Outgoing only</option>
       </select>
+
+      <p class="filter-title"><strong>Clustering Mode</strong></p>
+      <label class="checkbox-row">
+        <input id="toggleClusteringMode" type="checkbox" />
+        Auto-cluster by dependency communities (default: directory)
+      </label>
+
+      <label for="advancedQueryInput"><strong>Advanced Semantic Search</strong></label>
+      <div class="row">
+        <input id="advancedQueryInput" type="text" placeholder='e.g., "auth logic", "database layer"' />
+        <button id="advancedSearchButton" type="button">Search</button>
+      </div>
+      <p class="muted" id="semanticSearchHint">Try: auth-logic, database-layer, api-endpoints, ui-components, testing</p>
+
+      <label for="riskFilterRange"><strong>Risk Score Filter</strong></label>
+      <div class="stacked-control">
+        <input id="riskFilterRange" type="range" min="0" max="15" step="0.5" value="0" />
+        <p id="riskFilterValue" class="muted-inline">Showing all risk levels.</p>
+      </div>
 
       <p class="filter-title"><strong>Dependency Semantics</strong></p>
       <label class="checkbox-row"><input id="toggleStaticEdges" type="checkbox" checked /> Static imports</label>

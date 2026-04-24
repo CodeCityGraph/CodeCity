@@ -2,6 +2,8 @@ import graph from "./graph.json";
 import { createGraphFromZip, createGraphFromZipBuffer } from "./analyzer";
 import type { GraphData } from "./types";
 import { createViewer } from "./viewer";
+import { matchesSemanticQuery } from "./semanticSearch";
+import type { ClusteringMode } from "./layout";
 import "./style.css";
 
 const LLM_API_URL = "http://localhost:8002";
@@ -14,6 +16,8 @@ type EdgeDirection = "all" | "incoming" | "outgoing";
 
 interface FilterState {
   searchQuery: string;
+  advancedQuery: string;
+  useSemanticSearch: boolean;
   topDependedPercent: number;
   neighborhoodHops: number;
   edgeDirection: EdgeDirection;
@@ -23,6 +27,8 @@ interface FilterState {
   showExternalEdges: boolean;
   showOrphanModulesOnly: boolean;
   highlightGodFiles: boolean;
+  clusteringMode: ClusteringMode;
+  minRiskScore: number;
 }
 
 interface GitHubRepoInput {
@@ -33,6 +39,8 @@ interface GitHubRepoInput {
 
 const filterState: FilterState = {
   searchQuery: "",
+  advancedQuery: "",
+  useSemanticSearch: false,
   topDependedPercent: 100,
   neighborhoodHops: 1,
   edgeDirection: "all",
@@ -41,7 +49,9 @@ const filterState: FilterState = {
   showInternalEdges: true,
   showExternalEdges: true,
   showOrphanModulesOnly: false,
-  highlightGodFiles: false
+  highlightGodFiles: false,
+  clusteringMode: "directory",
+  minRiskScore: 0
 };
 
 function normalizeSampleGraph(raw: typeof graph): GraphData {
@@ -98,10 +108,16 @@ const loadGithubRepoButton = requiredElement<HTMLButtonElement>("loadGithubRepo"
 const sampleButton = requiredElement<HTMLButtonElement>("loadSample");
 const searchInput = requiredElement<HTMLInputElement>("searchInput");
 const focusButton = requiredElement<HTMLButtonElement>("focusButton");
+const resetFiltersButton = requiredElement<HTMLButtonElement>("resetFiltersButton");
 const topDependedRange = requiredElement<HTMLInputElement>("topDependedRange");
 const topDependedValue = requiredElement<HTMLParagraphElement>("topDependedValue");
 const neighborhoodSelect = requiredElement<HTMLSelectElement>("neighborhoodSelect");
 const edgeDirectionSelect = requiredElement<HTMLSelectElement>("edgeDirectionSelect");
+const toggleClusteringMode = requiredElement<HTMLInputElement>("toggleClusteringMode");
+const advancedQueryInput = requiredElement<HTMLInputElement>("advancedQueryInput");
+const advancedSearchButton = requiredElement<HTMLButtonElement>("advancedSearchButton");
+const riskFilterRange = requiredElement<HTMLInputElement>("riskFilterRange");
+const riskFilterValue = requiredElement<HTMLParagraphElement>("riskFilterValue");
 const toggleStaticEdges = requiredElement<HTMLInputElement>("toggleStaticEdges");
 const toggleDynamicEdges = requiredElement<HTMLInputElement>("toggleDynamicEdges");
 const toggleInternalEdges = requiredElement<HTMLInputElement>("toggleInternalEdges");
@@ -456,6 +472,9 @@ let cy = createViewer({
   onNodeSelect: renderDetails
 });
 
+let currentGraph: GraphData = normalizeSampleGraph(graph);
+let lastSearchMatches: Set<string> = new Set();
+
 function applyFilters(options: { fit?: boolean } = {}): { visibleCount: number; matchedSearchCount: number } {
   const { fit = false } = options;
 
@@ -483,6 +502,7 @@ function applyFilters(options: { fit?: boolean } = {}): { visibleCount: number; 
     });
 
     matchedSearchCount = matches.length;
+    lastSearchMatches = new Set(matches.map(m => m.id())); // Track matched nodes for focused fit
     const searchContext = new Set<string>();
     matches.forEach(node => {
       searchContext.add(node.id());
@@ -492,6 +512,38 @@ function applyFilters(options: { fit?: boolean } = {}): { visibleCount: number; 
       });
     });
     visibleNodeIds = intersects(visibleNodeIds, searchContext);
+  }
+
+  // Semantic/Advanced search filter
+  if (filterState.advancedQuery) {
+    const semanticMatches = nodes.filter(node => {
+      const path = String(node.data("path") ?? node.id());
+      return matchesSemanticQuery(path, filterState.advancedQuery);
+    });
+
+    if (semanticMatches.length > 0) {
+      const semanticContext = new Set<string>();
+      semanticMatches.forEach(node => {
+        semanticContext.add(node.id());
+        node.connectedEdges().forEach(edge => {
+          semanticContext.add(edge.source().id());
+          semanticContext.add(edge.target().id());
+        });
+      });
+      visibleNodeIds = intersects(visibleNodeIds, semanticContext);
+    }
+  }
+
+  // Risk score filter
+  if (filterState.minRiskScore > 0) {
+    const riskMatches = new Set<string>();
+    nodes.forEach(node => {
+      const riskScore = Number(node.data("riskScore") ?? 0);
+      if (riskScore >= filterState.minRiskScore) {
+        riskMatches.add(node.id());
+      }
+    });
+    visibleNodeIds = intersects(visibleNodeIds, riskMatches);
   }
 
   if (filterState.topDependedPercent < 100) {
@@ -573,12 +625,69 @@ function applyFilters(options: { fit?: boolean } = {}): { visibleCount: number; 
   }
 
   const visibleNodes = nodes.filter(node => !node.hasClass("dimmed"));
-  if (fit && visibleNodes.length > 0) {
+  
+  // If fitting and we have specific search matches, fit to just the matched nodes for better focus
+  if (fit && matchedSearchCount > 0) {
+    const matchedNodes = nodes.filter(node => lastSearchMatches.has(node.id()));
+    if (matchedNodes.length > 0) {
+      // Use a tighter padding for focused view
+      cy.fit(matchedNodes, 40);
+    }
+  } else if (fit && visibleNodes.length > 0) {
     cy.fit(visibleNodes, 80);
   }
 
   return { visibleCount: visibleNodes.length, matchedSearchCount };
 }
+
+function resetAllFilters(): void {
+  // Reset all filter state to defaults
+  filterState.searchQuery = "";
+  filterState.advancedQuery = "";
+  filterState.useSemanticSearch = false;
+  filterState.topDependedPercent = 100;
+  filterState.neighborhoodHops = 1;
+  filterState.edgeDirection = "all";
+  filterState.showStaticEdges = true;
+  filterState.showDynamicEdges = true;
+  filterState.showInternalEdges = true;
+  filterState.showExternalEdges = true;
+  filterState.showOrphanModulesOnly = false;
+  filterState.highlightGodFiles = false;
+  filterState.clusteringMode = "directory";
+  filterState.minRiskScore = 0;
+
+  // Reset UI controls
+  searchInput.value = "";
+  advancedQueryInput.value = "";
+  topDependedRange.value = "100";
+  neighborhoodSelect.value = "1";
+  edgeDirectionSelect.value = "all";
+  toggleStaticEdges.checked = true;
+  toggleDynamicEdges.checked = true;
+  toggleInternalEdges.checked = true;
+  toggleExternalEdges.checked = true;
+  toggleOrphanModules.checked = false;
+  toggleGodFiles.checked = false;
+  toggleClusteringMode.checked = false;
+  riskFilterRange.value = "0";
+
+  // Reset tracking variables
+  currentSelectedNodeId = null;
+  lastSearchMatches.clear();
+
+  // Update labels
+  formatTopDependedLabel(filterState.topDependedPercent);
+  formatRiskFilterLabel(filterState.minRiskScore);
+
+  // Clear selection and apply filters
+  cy.nodes().unselect();
+  applyFilters();
+  renderDetails(null);
+
+  setStatus("All filters reset to defaults.");
+}
+
 
 function renderDetails(nodeId: string | null): void {
   currentSelectedNodeId = nodeId;
@@ -636,10 +745,12 @@ function reloadViewer(nextGraph: GraphData): void {
   cy.destroy();
   currentSelectedNodeId = null;
   detailsRequestCounter += 1;
+  currentGraph = nextGraph;
   cy = createViewer({
     container,
     graph: nextGraph,
-    onNodeSelect: renderDetails
+    onNodeSelect: renderDetails,
+    clusteringMode: filterState.clusteringMode
   });
   applyFilters();
   renderDetails(null);
@@ -704,15 +815,18 @@ githubRepoInput.addEventListener("keydown", event => {
 
 focusButton.addEventListener("click", () => {
   filterState.searchQuery = searchInput.value.trim();
-  const result = applyFilters({ fit: true });
-
+  
   if (!filterState.searchQuery) {
+    lastSearchMatches.clear();
+    applyFilters();
     setStatus("Search cleared. Active filters still applied.");
     return;
   }
+  
+  const result = applyFilters({ fit: true });
 
   if (result.matchedSearchCount > 0) {
-    setStatus(`Focused ${result.matchedSearchCount} matched node(s) for "${filterState.searchQuery}".`);
+    setStatus(`Focused ${result.matchedSearchCount} matched node(s) for "${filterState.searchQuery}". Dimmed nodes shown for context.`);
   } else {
     setStatus(`No files matched "${filterState.searchQuery}". Try filename-only like "userService".`);
   }
@@ -721,6 +835,10 @@ focusButton.addEventListener("click", () => {
 searchInput.addEventListener("keydown", event => {
   if (event.key !== "Enter") return;
   focusButton.click();
+});
+
+resetFiltersButton.addEventListener("click", () => {
+  resetAllFilters();
 });
 
 topDependedRange.addEventListener("input", () => {
@@ -817,6 +935,50 @@ toggleLlmSummary.addEventListener("change", () => {
   setStatus("LLM summary enabled. The app will gracefully fall back if the server is unavailable.");
 });
 
+toggleClusteringMode.addEventListener("change", () => {
+  filterState.clusteringMode = toggleClusteringMode.checked ? "community" : "directory";
+  reloadViewer(currentGraph);
+  const modeLabel = filterState.clusteringMode === "community" ? "dependency communities" : "directory structure";
+  setStatus(`Clustering mode changed to: ${modeLabel}.`);
+});
+
+function formatRiskFilterLabel(threshold: number): void {
+  if (threshold <= 0) {
+    riskFilterValue.textContent = "Showing all risk levels.";
+  } else {
+    riskFilterValue.textContent = `Showing files with risk score ≥ ${threshold.toFixed(1)}.`;
+  }
+}
+
+riskFilterRange.addEventListener("input", () => {
+  filterState.minRiskScore = Number(riskFilterRange.value);
+  formatRiskFilterLabel(filterState.minRiskScore);
+  const result = applyFilters();
+  setStatus(`Risk score filter set to ≥ ${filterState.minRiskScore.toFixed(1)}. Visible nodes: ${result.visibleCount}.`);
+});
+
+advancedSearchButton.addEventListener("click", () => {
+  filterState.advancedQuery = advancedQueryInput.value.trim();
+  const result = applyFilters({ fit: true });
+
+  if (!filterState.advancedQuery) {
+    setStatus("Advanced semantic search cleared.");
+    return;
+  }
+
+  if (result.matchedSearchCount > 0 || result.visibleCount > 0) {
+    setStatus(`Semantic search applied for "${filterState.advancedQuery}". Visible nodes: ${result.visibleCount}.`);
+  } else {
+    setStatus(`No results for semantic query "${filterState.advancedQuery}". Try: auth-logic, database-layer, api-endpoints, ui-components, testing`);
+  }
+});
+
+advancedQueryInput.addEventListener("keydown", event => {
+  if (event.key !== "Enter") return;
+  advancedSearchButton.click();
+});
+
 formatTopDependedLabel(filterState.topDependedPercent);
+formatRiskFilterLabel(filterState.minRiskScore);
 applyFilters();
 playGalaxyEntryAnimation();
