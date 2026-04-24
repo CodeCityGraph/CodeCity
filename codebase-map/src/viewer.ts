@@ -6,8 +6,11 @@ interface CreateViewerOptions {
   container?: HTMLElement;
   graph: GraphData;
   onNodeSelect?: (nodeId: string | null) => void;
+  onReady?: () => void;
   headless?: boolean;
   clusteringMode?: ClusteringMode;
+  progressiveRender?: boolean;
+  renderBatchSize?: number;
 }
 
 interface Point {
@@ -171,8 +174,38 @@ function buildClusterStarElements(
   return stars;
 }
 
+function addElementsInBatches(cy: Core, elements: Array<any>, batchSize: number, onComplete?: () => void): void {
+  let index = 0;
+
+  const addNextBatch = (): void => {
+    const batch = elements.slice(index, index + batchSize);
+    if (batch.length > 0) {
+      cy.add(batch);
+      index += batch.length;
+    }
+
+    if (index < elements.length) {
+      window.requestAnimationFrame(addNextBatch);
+      return;
+    }
+
+    onComplete?.();
+  };
+
+  addNextBatch();
+}
+
 export function createViewer(options: CreateViewerOptions): Core {
-  const { container, graph, onNodeSelect, headless = false, clusteringMode = "directory" } = options;
+  const {
+    container,
+    graph,
+    onNodeSelect,
+    onReady,
+    headless = false,
+    clusteringMode = "directory",
+    progressiveRender = false,
+    renderBatchSize = 250
+  } = options;
   
   // Select positioning function based on clustering mode
   const positions = clusteringMode === "community"
@@ -234,10 +267,12 @@ export function createViewer(options: CreateViewerOptions): Core {
     }))
   ];
 
+  const useProgressiveRender = progressiveRender && !headless;
+
   const cy = cytoscape({
     container,
     headless,
-    elements,
+    elements: useProgressiveRender ? [] : elements,
     style: ([
       {
         selector: "node.source-node",
@@ -461,6 +496,14 @@ export function createViewer(options: CreateViewerOptions): Core {
     minZoom: 0.01,
     maxZoom: 4
   });
+
+  if (useProgressiveRender) {
+    addElementsInBatches(cy, elements, Math.max(50, renderBatchSize), () => {
+      onReady?.();
+    });
+  } else {
+    window.setTimeout(() => onReady?.(), 0);
+  }
 
   let isFittingToView = false;
   let isConstrainingPan = false;

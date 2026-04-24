@@ -22,6 +22,15 @@ interface ImportSpecifier {
   pathLike: boolean;
 }
 
+export interface AnalysisProgress {
+  stage: "loading" | "reading-files" | "building-graph" | "done";
+  processedFiles: number;
+  totalFiles: number;
+  currentPath?: string;
+}
+
+type ProgressCallback = (progress: AnalysisProgress) => void;
+
 const TEXT_EXTENSIONS = new Set([
   ".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs",
   ".py", ".java", ".kt", ".kts", ".scala",
@@ -502,11 +511,16 @@ export function createGraphFromFiles(files: SourceFile[], partialConfig: Partial
   return { nodes, edges, unresolvedImports };
 }
 
-async function createGraphFromZipSource(zipSource: File | ArrayBuffer): Promise<GraphData> {
+async function createGraphFromZipSource(zipSource: File | ArrayBuffer, onProgress?: ProgressCallback): Promise<GraphData> {
   const zip = await JSZip.loadAsync(zipSource);
   const files: SourceFile[] = [];
 
   const entries = Object.entries(zip.files);
+  const entryCount = entries.filter(([, entry]) => !entry.dir).length;
+  let processedFiles = 0;
+
+  onProgress?.({ stage: "loading", processedFiles: 0, totalFiles: entryCount });
+
   for (const [path, entry] of entries) {
     if (entry.dir) continue;
     if (!shouldIncludePath(path, defaultConfig)) continue;
@@ -524,9 +538,23 @@ async function createGraphFromZipSource(zipSource: File | ArrayBuffer): Promise<
       content,
       sizeBytes
     });
+
+    processedFiles += 1;
+    if (processedFiles === 1 || processedFiles % 50 === 0 || processedFiles === entryCount) {
+      onProgress?.({
+        stage: "reading-files",
+        processedFiles,
+        totalFiles: entryCount,
+        currentPath: path
+      });
+    }
   }
 
-  return createGraphFromFiles(files);
+  onProgress?.({ stage: "building-graph", processedFiles, totalFiles: entryCount });
+
+  const graph = createGraphFromFiles(files);
+  onProgress?.({ stage: "done", processedFiles: entryCount, totalFiles: entryCount });
+  return graph;
 }
 
 export async function createGraphFromZip(zipFile: File): Promise<GraphData> {
@@ -535,4 +563,11 @@ export async function createGraphFromZip(zipFile: File): Promise<GraphData> {
 
 export async function createGraphFromZipBuffer(zipBuffer: ArrayBuffer): Promise<GraphData> {
   return createGraphFromZipSource(zipBuffer);
+}
+
+export async function createGraphFromZipBufferWithProgress(
+  zipBuffer: ArrayBuffer,
+  onProgress?: ProgressCallback
+): Promise<GraphData> {
+  return createGraphFromZipSource(zipBuffer, onProgress);
 }

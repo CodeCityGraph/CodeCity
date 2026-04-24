@@ -1,5 +1,5 @@
 import graph from "./graph.json";
-import { createGraphFromZip, createGraphFromZipBuffer } from "./analyzer";
+import { createGraphFromZipBuffer, type AnalysisProgress } from "./analyzer";
 import type { GraphData } from "./types";
 import { createViewer } from "./viewer";
 import { matchesSemanticQuery } from "./semanticSearch";
@@ -27,6 +27,7 @@ interface FilterState {
   showExternalEdges: boolean;
   showOrphanModulesOnly: boolean;
   highlightGodFiles: boolean;
+  scalabilityMode: boolean;
   clusteringMode: ClusteringMode;
   minRiskScore: number;
 }
@@ -50,6 +51,7 @@ const filterState: FilterState = {
   showExternalEdges: true,
   showOrphanModulesOnly: false,
   highlightGodFiles: false,
+  scalabilityMode: false,
   clusteringMode: "directory",
   minRiskScore: 0
 };
@@ -123,9 +125,117 @@ const toggleDynamicEdges = requiredElement<HTMLInputElement>("toggleDynamicEdges
 const toggleInternalEdges = requiredElement<HTMLInputElement>("toggleInternalEdges");
 const toggleExternalEdges = requiredElement<HTMLInputElement>("toggleExternalEdges");
 const toggleLlmSummary = requiredElement<HTMLInputElement>("toggleLlmSummary");
+const toggleScalabilityMode = requiredElement<HTMLInputElement>("toggleScalabilityMode");
 const toggleOrphanModules = requiredElement<HTMLInputElement>("toggleOrphanModules");
 const toggleGodFiles = requiredElement<HTMLInputElement>("toggleGodFiles");
 const statusLabel = requiredElement<HTMLParagraphElement>("status");
+
+interface WorkerAnalyzeRequest {
+  type: "analyze";
+  requestId: number;
+  zipBuffer: ArrayBuffer;
+}
+
+interface WorkerProgressMessage {
+  type: "progress";
+  requestId: number;
+  progress: AnalysisProgress;
+}
+
+interface WorkerResultMessage {
+  type: "result";
+  requestId: number;
+  graph: GraphData;
+}
+
+interface WorkerErrorMessage {
+  type: "error";
+  requestId: number;
+  message: string;
+}
+
+type WorkerMessage = WorkerProgressMessage | WorkerResultMessage | WorkerErrorMessage;
+
+function setAnalysisLoadingState(isLoading: boolean): void {
+  fileInput.disabled = isLoading;
+  sampleButton.disabled = isLoading;
+  loadGithubRepoButton.disabled = isLoading;
+  githubRepoInput.disabled = isLoading;
+}
+
+function formatAnalysisProgress(progress: AnalysisProgress, label: string): string {
+  const base = `Scalability mode: ${label}`;
+  if (progress.stage === "loading") {
+    return `${base} - opening archive...`;
+  }
+  if (progress.stage === "reading-files") {
+    return `${base} - reading files (${progress.processedFiles}/${progress.totalFiles})${progress.currentPath ? `: ${progress.currentPath}` : ""}`;
+  }
+  if (progress.stage === "building-graph") {
+    return `${base} - building dependency graph (${progress.processedFiles}/${progress.totalFiles})...`;
+  }
+  return `${base} - analysis complete.`;
+}
+
+let analysisWorker: Worker | null = null;
+let analysisRequestCounter = 0;
+
+function getAnalysisWorker(): Worker | null {
+  if (!("Worker" in window)) return null;
+  if (!analysisWorker) {
+    analysisWorker = new Worker(new URL("./analysisWorker.ts", import.meta.url), { type: "module" });
+  }
+  return analysisWorker;
+}
+
+async function analyzeZipBuffer(zipBuffer: ArrayBuffer, label: string): Promise<GraphData> {
+  if (!filterState.scalabilityMode) {
+    return createGraphFromZipBuffer(zipBuffer);
+  }
+
+  const worker = getAnalysisWorker();
+  if (!worker) {
+    return createGraphFromZipBuffer(zipBuffer);
+  }
+
+  return new Promise<GraphData>((resolve, reject) => {
+    const requestId = ++analysisRequestCounter;
+
+    const cleanup = (): void => {
+      worker.removeEventListener("message", handleMessage);
+      worker.removeEventListener("error", handleError);
+    };
+
+    const handleError = (): void => {
+      cleanup();
+      reject(new Error("Web Worker analysis failed."));
+    };
+
+    const handleMessage = (event: MessageEvent): void => {
+      const message = event.data as WorkerMessage;
+      if (message.requestId !== requestId) return;
+
+      if (message.type === "progress") {
+        setStatus(formatAnalysisProgress(message.progress, label));
+        return;
+      }
+
+      cleanup();
+
+      if (message.type === "error") {
+        reject(new Error(message.message));
+        return;
+      }
+
+      resolve(message.graph);
+    };
+
+    worker.addEventListener("message", handleMessage);
+    worker.addEventListener("error", handleError);
+    setStatus(`Scalability mode: analyzing ${label} in a Web Worker...`);
+    worker.postMessage({ type: "analyze", requestId, zipBuffer } satisfies WorkerAnalyzeRequest, [zipBuffer]);
+  });
+}
 const detailsPanel = requiredElement<HTMLDivElement>("details");
 
 function playGalaxyEntryAnimation(): void {
@@ -654,6 +764,7 @@ function resetAllFilters(): void {
   filterState.showExternalEdges = true;
   filterState.showOrphanModulesOnly = false;
   filterState.highlightGodFiles = false;
+  filterState.scalabilityMode = false;
   filterState.clusteringMode = "directory";
   filterState.minRiskScore = 0;
 
@@ -669,6 +780,7 @@ function resetAllFilters(): void {
   toggleExternalEdges.checked = true;
   toggleOrphanModules.checked = false;
   toggleGodFiles.checked = false;
+  toggleScalabilityMode.checked = false;
   toggleClusteringMode.checked = false;
   riskFilterRange.value = "0";
 
@@ -750,11 +862,14 @@ function reloadViewer(nextGraph: GraphData): void {
     container,
     graph: nextGraph,
     onNodeSelect: renderDetails,
-    clusteringMode: filterState.clusteringMode
+    clusteringMode: filterState.clusteringMode,
+    progressiveRender: filterState.scalabilityMode,
+    onReady: () => {
+      applyFilters();
+      renderDetails(null);
+      playGalaxyEntryAnimation();
+    }
   });
-  applyFilters();
-  renderDetails(null);
-  playGalaxyEntryAnimation();
 }
 
 sampleButton.addEventListener("click", () => {
@@ -767,9 +882,11 @@ fileInput.addEventListener("change", async event => {
   const file = target.files?.[0];
   if (!file) return;
 
+  setAnalysisLoadingState(true);
   setStatus(`Analyzing ${file.name}...`);
   try {
-    const analyzed = await createGraphFromZip(file);
+    const zipBuffer = await file.arrayBuffer();
+    const analyzed = await analyzeZipBuffer(zipBuffer, file.name);
     reloadViewer(analyzed);
     setStatus(
       `Loaded ${analyzed.nodes.length} nodes, ${analyzed.edges.length} edges. ` +
@@ -778,6 +895,8 @@ fileInput.addEventListener("change", async event => {
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";
     setStatus(`Failed to analyze zip: ${message}`);
+  } finally {
+    setAnalysisLoadingState(false);
   }
 });
 
@@ -789,12 +908,12 @@ loadGithubRepoButton.addEventListener("click", async () => {
   }
 
   setGithubLoadingState(true);
+  setAnalysisLoadingState(true);
   try {
     const parsed = parseGitHubRepoInput(rawInput);
     setStatus(`Downloading ${parsed.owner}/${parsed.repo} from GitHub...`);
     const { zipBuffer, resolvedRef } = await downloadGitHubZip(parsed);
-    setStatus(`Analyzing ${parsed.owner}/${parsed.repo}@${resolvedRef}...`);
-    const analyzed = await createGraphFromZipBuffer(zipBuffer);
+    const analyzed = await analyzeZipBuffer(zipBuffer, `${parsed.owner}/${parsed.repo}@${resolvedRef}`);
     reloadViewer(analyzed);
     setStatus(
       `Loaded ${analyzed.nodes.length} nodes, ${analyzed.edges.length} edges from ${parsed.owner}/${parsed.repo}@${resolvedRef}. ` +
@@ -804,6 +923,7 @@ loadGithubRepoButton.addEventListener("click", async () => {
     const message = error instanceof Error ? error.message : "Unknown error";
     setStatus(`Failed to load GitHub repo: ${message}`);
   } finally {
+    setAnalysisLoadingState(false);
     setGithubLoadingState(false);
   }
 });
@@ -902,6 +1022,15 @@ toggleInternalEdges.addEventListener("change", () => {
 toggleExternalEdges.addEventListener("change", () => {
   clampScopeToggleAtLeastOne();
   applySemanticToggleStatus();
+});
+
+toggleScalabilityMode.addEventListener("change", () => {
+  filterState.scalabilityMode = toggleScalabilityMode.checked;
+  setStatus(
+    filterState.scalabilityMode
+      ? "Scalability mode enabled. Large repos will use worker analysis and progressive rendering."
+      : "Scalability mode disabled. Loading uses the regular single-pass path."
+  );
 });
 
 toggleOrphanModules.addEventListener("change", () => {
