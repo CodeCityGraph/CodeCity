@@ -108,6 +108,7 @@ const loadGithubRepoButton = requiredElement<HTMLButtonElement>("loadGithubRepo"
 const sampleButton = requiredElement<HTMLButtonElement>("loadSample");
 const searchInput = requiredElement<HTMLInputElement>("searchInput");
 const focusButton = requiredElement<HTMLButtonElement>("focusButton");
+const resetFiltersButton = requiredElement<HTMLButtonElement>("resetFiltersButton");
 const topDependedRange = requiredElement<HTMLInputElement>("topDependedRange");
 const topDependedValue = requiredElement<HTMLParagraphElement>("topDependedValue");
 const neighborhoodSelect = requiredElement<HTMLSelectElement>("neighborhoodSelect");
@@ -639,6 +640,55 @@ function applyFilters(options: { fit?: boolean } = {}): { visibleCount: number; 
   return { visibleCount: visibleNodes.length, matchedSearchCount };
 }
 
+function resetAllFilters(): void {
+  // Reset all filter state to defaults
+  filterState.searchQuery = "";
+  filterState.advancedQuery = "";
+  filterState.useSemanticSearch = false;
+  filterState.topDependedPercent = 100;
+  filterState.neighborhoodHops = 1;
+  filterState.edgeDirection = "all";
+  filterState.showStaticEdges = true;
+  filterState.showDynamicEdges = true;
+  filterState.showInternalEdges = true;
+  filterState.showExternalEdges = true;
+  filterState.showOrphanModulesOnly = false;
+  filterState.highlightGodFiles = false;
+  filterState.clusteringMode = "directory";
+  filterState.minRiskScore = 0;
+
+  // Reset UI controls
+  searchInput.value = "";
+  advancedQueryInput.value = "";
+  topDependedRange.value = "100";
+  neighborhoodSelect.value = "1";
+  edgeDirectionSelect.value = "all";
+  toggleStaticEdges.checked = true;
+  toggleDynamicEdges.checked = true;
+  toggleInternalEdges.checked = true;
+  toggleExternalEdges.checked = true;
+  toggleOrphanModules.checked = false;
+  toggleGodFiles.checked = false;
+  toggleClusteringMode.checked = false;
+  riskFilterRange.value = "0";
+
+  // Reset tracking variables
+  currentSelectedNodeId = null;
+  lastSearchMatches.clear();
+
+  // Update labels
+  formatTopDependedLabel(filterState.topDependedPercent);
+  formatRiskFilterLabel(filterState.minRiskScore);
+
+  // Clear selection and apply filters
+  cy.nodes().unselect();
+  applyFilters();
+  renderDetails(null);
+
+  setStatus("All filters reset to defaults.");
+}
+
+
 function renderDetails(nodeId: string | null): void {
   currentSelectedNodeId = nodeId;
   cy.nodes().unselect();
@@ -785,6 +835,10 @@ focusButton.addEventListener("click", () => {
 searchInput.addEventListener("keydown", event => {
   if (event.key !== "Enter") return;
   focusButton.click();
+});
+
+resetFiltersButton.addEventListener("click", () => {
+  resetAllFilters();
 });
 
 topDependedRange.addEventListener("input", () => {
