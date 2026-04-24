@@ -475,7 +475,7 @@ let cy = createViewer({
 let currentGraph: GraphData = normalizeSampleGraph(graph);
 let lastSearchMatches: Set<string> = new Set();
 
-function applyFilters(options: { fit?: boolean } = {}): { visibleCount: number; matchedSearchCount: number } {
+function applyFilters(options: { fit?: boolean } = {}): { visibleCount: number; matchedSearchCount: number; matchedAdvancedCount: number } {
   const { fit = false } = options;
 
   const nodes = cy.nodes().filter(node => !node.hasClass("twinkle-star"));
@@ -494,6 +494,7 @@ function applyFilters(options: { fit?: boolean } = {}): { visibleCount: number; 
 
   let visibleNodeIds = new Set(nodes.map(node => node.id()));
   let matchedSearchCount = 0;
+  let matchedAdvancedCount = 0;
 
   if (filterState.searchQuery) {
     const matches = nodes.filter(node => {
@@ -521,17 +522,16 @@ function applyFilters(options: { fit?: boolean } = {}): { visibleCount: number; 
       return matchesSemanticQuery(path, filterState.advancedQuery);
     });
 
-    if (semanticMatches.length > 0) {
-      const semanticContext = new Set<string>();
-      semanticMatches.forEach(node => {
-        semanticContext.add(node.id());
-        node.connectedEdges().forEach(edge => {
-          semanticContext.add(edge.source().id());
-          semanticContext.add(edge.target().id());
-        });
+    matchedAdvancedCount = semanticMatches.length;
+    const semanticContext = new Set<string>();
+    semanticMatches.forEach(node => {
+      semanticContext.add(node.id());
+      node.connectedEdges().forEach(edge => {
+        semanticContext.add(edge.source().id());
+        semanticContext.add(edge.target().id());
       });
-      visibleNodeIds = intersects(visibleNodeIds, semanticContext);
-    }
+    });
+    visibleNodeIds = intersects(visibleNodeIds, semanticContext);
   }
 
   // Risk score filter
@@ -637,7 +637,7 @@ function applyFilters(options: { fit?: boolean } = {}): { visibleCount: number; 
     cy.fit(visibleNodes, 80);
   }
 
-  return { visibleCount: visibleNodes.length, matchedSearchCount };
+  return { visibleCount: visibleNodes.length, matchedSearchCount, matchedAdvancedCount };
 }
 
 function resetAllFilters(): void {
@@ -966,8 +966,8 @@ advancedSearchButton.addEventListener("click", () => {
     return;
   }
 
-  if (result.matchedSearchCount > 0 || result.visibleCount > 0) {
-    setStatus(`Semantic search applied for "${filterState.advancedQuery}". Visible nodes: ${result.visibleCount}.`);
+  if (result.matchedAdvancedCount > 0) {
+    setStatus(`Semantic search matched ${result.matchedAdvancedCount} node(s) for "${filterState.advancedQuery}". Visible nodes: ${result.visibleCount}.`);
   } else {
     setStatus(`No results for semantic query "${filterState.advancedQuery}". Try: auth-logic, database-layer, api-endpoints, ui-components, testing`);
   }

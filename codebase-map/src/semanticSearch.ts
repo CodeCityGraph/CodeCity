@@ -123,6 +123,16 @@ export function parseSemanticQuery(query: string): {
   literalTerms: string[];
 } {
   const normalized = normalizeSemanticText(query);
+  const matchedCategories = new Set<string>();
+
+  // Capture explicit category references like "auth-logic" / "auth logic" first.
+  for (const categoryName of Object.keys(SEMANTIC_CATEGORIES)) {
+    const normalizedCategory = normalizeSemanticText(categoryName);
+    if (normalized.includes(normalizedCategory)) {
+      matchedCategories.add(categoryName);
+    }
+  }
+
   const tokens = normalized.split(/[^a-z0-9]+/g).filter(Boolean);
   
   const semanticTerms: string[] = [];
@@ -131,9 +141,14 @@ export function parseSemanticQuery(query: string): {
   for (const token of tokens) {
     // Check if token matches any semantic category keyword
     let isSemanticTerm = false;
-    for (const category of Object.values(SEMANTIC_CATEGORIES)) {
-      if (category.keywords.some(kw => kw.includes(token) || token.includes(kw))) {
+    for (const [categoryName, category] of Object.entries(SEMANTIC_CATEGORIES)) {
+      const categoryParts = normalizeSemanticText(categoryName).split(/\s+/g).filter(Boolean);
+      if (
+        category.keywords.some(kw => kw.includes(token) || token.includes(kw)) ||
+        categoryParts.some(part => part === token)
+      ) {
         semanticTerms.push(token);
+        matchedCategories.add(categoryName);
         isSemanticTerm = true;
         break;
       }
@@ -143,7 +158,10 @@ export function parseSemanticQuery(query: string): {
     }
   }
 
-  return { semanticTerms, literalTerms };
+  return {
+    semanticTerms: [...new Set([...semanticTerms, ...matchedCategories])],
+    literalTerms
+  };
 }
 
 /**
@@ -154,36 +172,50 @@ export function matchesSemanticQuery(path: string, query: string): boolean {
   if (!query) return true;
 
   const result = parseSemanticQuery(query);
+  const normalizedPath = normalizeSemanticText(path);
+
+  const literalMatches = result.literalTerms.every(term => normalizedPath.includes(term));
   
-  // If no semantic terms, fall back to literal matching
+  // If no semantic terms, use literal-only matching.
   if (result.semanticTerms.length === 0) {
-    return true;
+    return literalMatches;
   }
 
-  // Check if any semantic term matches the path's semantic categories
+  // Check if any semantic term matches the path's semantic categories.
   const pathSemantics = matchesSemanticPattern(path);
+  let semanticMatches = false;
   
   // For each semantic term in the query, check if path has matching categories
   for (const term of result.semanticTerms) {
     // Check if term is a key in SEMANTIC_CATEGORIES
     if (SEMANTIC_CATEGORIES[term]) {
       if (pathSemantics.categories.includes(term)) {
-        return true;
+        semanticMatches = true;
+        break;
       }
     } else {
       // Check if term matches any category's keywords
       for (const categoryName of Object.keys(SEMANTIC_CATEGORIES)) {
         const category = SEMANTIC_CATEGORIES[categoryName];
-        if (category.keywords.some(kw => kw.includes(term) || term.includes(kw))) {
+        const categoryKey = normalizeSemanticText(categoryName);
+        if (
+          categoryKey.includes(term) ||
+          category.keywords.some(kw => kw.includes(term) || term.includes(kw))
+        ) {
           if (pathSemantics.categories.includes(categoryName)) {
-            return true;
+            semanticMatches = true;
+            break;
           }
         }
       }
+      if (semanticMatches) break;
     }
   }
 
-  return false;
+  if (!semanticMatches) return false;
+
+  // If literals are provided with semantic terms, require both.
+  return literalMatches;
 }
 
 /**
