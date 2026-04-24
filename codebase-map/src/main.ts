@@ -472,6 +472,7 @@ let cy = createViewer({
 });
 
 let currentGraph: GraphData = normalizeSampleGraph(graph);
+let lastSearchMatches: Set<string> = new Set();
 
 function applyFilters(options: { fit?: boolean } = {}): { visibleCount: number; matchedSearchCount: number } {
   const { fit = false } = options;
@@ -500,6 +501,7 @@ function applyFilters(options: { fit?: boolean } = {}): { visibleCount: number; 
     });
 
     matchedSearchCount = matches.length;
+    lastSearchMatches = new Set(matches.map(m => m.id())); // Track matched nodes for focused fit
     const searchContext = new Set<string>();
     matches.forEach(node => {
       searchContext.add(node.id());
@@ -622,7 +624,15 @@ function applyFilters(options: { fit?: boolean } = {}): { visibleCount: number; 
   }
 
   const visibleNodes = nodes.filter(node => !node.hasClass("dimmed"));
-  if (fit && visibleNodes.length > 0) {
+  
+  // If fitting and we have specific search matches, fit to just the matched nodes for better focus
+  if (fit && matchedSearchCount > 0) {
+    const matchedNodes = nodes.filter(node => lastSearchMatches.has(node.id()));
+    if (matchedNodes.length > 0) {
+      // Use a tighter padding for focused view
+      cy.fit(matchedNodes, 40);
+    }
+  } else if (fit && visibleNodes.length > 0) {
     cy.fit(visibleNodes, 80);
   }
 
@@ -755,15 +765,18 @@ githubRepoInput.addEventListener("keydown", event => {
 
 focusButton.addEventListener("click", () => {
   filterState.searchQuery = searchInput.value.trim();
-  const result = applyFilters({ fit: true });
-
+  
   if (!filterState.searchQuery) {
+    lastSearchMatches.clear();
+    applyFilters();
     setStatus("Search cleared. Active filters still applied.");
     return;
   }
+  
+  const result = applyFilters({ fit: true });
 
   if (result.matchedSearchCount > 0) {
-    setStatus(`Focused ${result.matchedSearchCount} matched node(s) for "${filterState.searchQuery}".`);
+    setStatus(`Focused ${result.matchedSearchCount} matched node(s) for "${filterState.searchQuery}". Dimmed nodes shown for context.`);
   } else {
     setStatus(`No files matched "${filterState.searchQuery}". Try filename-only like "userService".`);
   }
