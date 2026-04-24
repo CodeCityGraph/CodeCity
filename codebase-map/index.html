@@ -19,14 +19,46 @@
       </div>
       <p class="muted">Sprint 1 Integration + QA Workspace</p>
 
-      <label for="repoZipInput"><strong>Load Repo Zip</strong></label>
-      <input id="repoZipInput" type="file" accept=".zip" />
-      <label for="githubRepoInput"><strong>Load Public GitHub Repo</strong></label>
-      <div class="row">
-        <input id="githubRepoInput" type="text" placeholder="https://github.com/owner/repo" />
-        <button id="loadGithubRepo" type="button">Load</button>
+      <label for="viewModeSelect"><strong>View Mode</strong></label>
+      <select id="viewModeSelect">
+        <option value="single" selected>Single</option>
+        <option value="comparison">Comparison</option>
+      </select>
+
+      <div id="singleModeControls" class="mode-section">
+        <label for="repoZipInput"><strong>Load Repo Zip</strong></label>
+        <input id="repoZipInput" type="file" accept=".zip" />
+        <label for="githubRepoInput"><strong>Load Public GitHub Repo</strong></label>
+        <div class="row">
+          <input id="githubRepoInput" type="text" placeholder="https://github.com/owner/repo" />
+          <button id="loadGithubRepo" type="button">Load</button>
+        </div>
+        <button id="loadSample" type="button">Load Sample</button>
       </div>
-      <button id="loadSample" type="button">Load Sample</button>
+
+      <div id="comparisonModeControls" class="mode-section" hidden>
+        <h3>Before / After Compare</h3>
+        <p class="muted-inline">Compare two snapshots and highlight differences side by side.</p>
+
+        <label for="compareRepoInput"><strong>Compare Repo Refs</strong></label>
+        <input id="compareRepoInput" type="text" placeholder="https://github.com/owner/repo or owner/repo" />
+        <div class="comparison-grid">
+          <label for="compareBeforeRefInput">Before ref</label>
+          <input id="compareBeforeRefInput" type="text" placeholder="main" />
+          <label for="compareAfterRefInput">After ref</label>
+          <input id="compareAfterRefInput" type="text" placeholder="feature-branch or commit SHA" />
+        </div>
+        <button id="compareRepoButton" type="button">Compare Repo Refs</button>
+
+        <label for="compareBeforeZipInput"><strong>Compare Zip Files</strong></label>
+        <div class="comparison-grid">
+          <label for="compareBeforeZipInput">Before zip</label>
+          <input id="compareBeforeZipInput" type="file" accept=".zip" />
+          <label for="compareAfterZipInput">After zip</label>
+          <input id="compareAfterZipInput" type="file" accept=".zip" />
+        </div>
+        <button id="compareZipButton" type="button">Compare Zip Files</button>
+      </div>
 
       <hr />
 
@@ -93,7 +125,16 @@
         <p>Select a node to inspect details.</p>
       </div>
     </div>
-    <div id="cy"></div>
+    <div id="graphArea">
+      <div id="graphPanePrimary" class="graph-pane">
+        <p id="paneBeforeLabel" class="pane-label" hidden>Before</p>
+        <div id="cy"></div>
+      </div>
+      <div id="graphPaneSecondary" class="graph-pane" hidden>
+        <p id="paneAfterLabel" class="pane-label" hidden>After</p>
+        <div id="cySecondary"></div>
+      </div>
+    </div>
   </div>
 
   <script type="module" src="/src/main.ts"></script>

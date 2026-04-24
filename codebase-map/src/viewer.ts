@@ -380,6 +380,60 @@ export function createViewer(options: CreateViewerOptions): Core {
         }
       },
       {
+        selector: "node.compare-shared",
+        style: {
+          "border-width": 3.3,
+          "border-color": "#8cf4ff"
+        }
+      },
+      {
+        selector: "node.compare-removed",
+        style: {
+          "border-width": 4.1,
+          "border-color": "#ff7a98",
+          "shadow-color": "#ff5b82",
+          "shadow-opacity": 1,
+          "shadow-blur": 40
+        }
+      },
+      {
+        selector: "node.compare-added",
+        style: {
+          "border-width": 4.1,
+          "border-color": "#8afac9",
+          "shadow-color": "#61f3ba",
+          "shadow-opacity": 1,
+          "shadow-blur": 40
+        }
+      },
+      {
+        selector: "edge.compare-shared",
+        style: {
+          width: 2.5,
+          "line-color": "#74e5ff",
+          "target-arrow-color": "#74e5ff",
+          opacity: 0.95
+        }
+      },
+      {
+        selector: "edge.compare-removed",
+        style: {
+          width: 3,
+          "line-color": "#ff6f90",
+          "target-arrow-color": "#ff6f90",
+          opacity: 0.95
+        }
+      },
+      {
+        selector: "edge.compare-added",
+        style: {
+          width: 3,
+          "line-color": "#75ffcd",
+          "target-arrow-color": "#75ffcd",
+          opacity: 0.95
+        }
+      },
+      {
         selector: "node.focus-primary",
         style: {
           "z-index": 999,
