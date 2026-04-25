@@ -129,6 +129,7 @@ const toggleScalabilityMode = requiredElement<HTMLInputElement>("toggleScalabili
 const toggleOrphanModules = requiredElement<HTMLInputElement>("toggleOrphanModules");
 const toggleGodFiles = requiredElement<HTMLInputElement>("toggleGodFiles");
 const statusLabel = requiredElement<HTMLParagraphElement>("status");
+const architectureChecksStatus = requiredElement<HTMLParagraphElement>("architectureChecksStatus");
 
 interface WorkerAnalyzeRequest {
   type: "analyze";
@@ -248,6 +249,10 @@ function playGalaxyEntryAnimation(): void {
 
 function setStatus(text: string): void {
   statusLabel.textContent = text;
+}
+
+function setArchitectureChecksStatus(text: string): void {
+  architectureChecksStatus.textContent = text;
 }
 function normalizeText(value: string): string {
   return value.toLowerCase().replace(/\\/g, "/");
@@ -791,6 +796,7 @@ function resetAllFilters(): void {
   // Update labels
   formatTopDependedLabel(filterState.topDependedPercent);
   formatRiskFilterLabel(filterState.minRiskScore);
+  setArchitectureChecksStatus("Architecture checks inactive.");
 
   // Clear selection and apply filters
   cy.nodes().unselect();
@@ -1036,7 +1042,7 @@ toggleScalabilityMode.addEventListener("change", () => {
 toggleOrphanModules.addEventListener("change", () => {
   filterState.showOrphanModulesOnly = toggleOrphanModules.checked;
   const result = applyFilters();
-  setStatus(
+  setArchitectureChecksStatus(
     filterState.showOrphanModulesOnly
       ? `Orphan-module check enabled. Visible nodes: ${result.visibleCount}.`
       : `Orphan-module check disabled. Visible nodes: ${result.visibleCount}.`
@@ -1046,7 +1052,7 @@ toggleOrphanModules.addEventListener("change", () => {
 toggleGodFiles.addEventListener("change", () => {
   filterState.highlightGodFiles = toggleGodFiles.checked;
   const result = applyFilters();
-  setStatus(
+  setArchitectureChecksStatus(
     filterState.highlightGodFiles
       ? `God-file heuristic highlighting enabled. Visible nodes: ${result.visibleCount}.`
       : `God-file heuristic highlighting disabled. Visible nodes: ${result.visibleCount}.`

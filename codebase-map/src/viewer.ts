@@ -189,7 +189,7 @@ function addElementsInBatches(cy: Core, elements: Array<any>, batchSize: number,
       return;
     }
 
-    onComplete?.();
+    window.requestAnimationFrame(() => onComplete?.());
   };
 
   addNextBatch();
@@ -499,6 +499,10 @@ export function createViewer(options: CreateViewerOptions): Core {
 
   if (useProgressiveRender) {
     addElementsInBatches(cy, elements, Math.max(50, renderBatchSize), () => {
+      // Run these once elements exist; cy.ready may fire before batched additions complete.
+      lockZoomOutAtFit();
+      constrainPanToViewport();
+      startStarTwinkle();
       onReady?.();
     });
   } else {
