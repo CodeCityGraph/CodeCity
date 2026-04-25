@@ -1,5 +1,5 @@
 import graph from "./graph.json";
-import { createGraphFromZip, createGraphFromZipBuffer } from "./analyzer";
+import { createGraphFromZipBuffer, type AnalysisProgress } from "./analyzer";
 import type { GraphData } from "./types";
 import { createViewer } from "./viewer";
 import { matchesSemanticQuery } from "./semanticSearch";
@@ -27,6 +27,7 @@ interface FilterState {
   showExternalEdges: boolean;
   showOrphanModulesOnly: boolean;
   highlightGodFiles: boolean;
+  scalabilityMode: boolean;
   clusteringMode: ClusteringMode;
   minRiskScore: number;
 }
@@ -50,6 +51,7 @@ const filterState: FilterState = {
   showExternalEdges: true,
   showOrphanModulesOnly: false,
   highlightGodFiles: false,
+  scalabilityMode: false,
   clusteringMode: "directory",
   minRiskScore: 0
 };
@@ -123,9 +125,118 @@ const toggleDynamicEdges = requiredElement<HTMLInputElement>("toggleDynamicEdges
 const toggleInternalEdges = requiredElement<HTMLInputElement>("toggleInternalEdges");
 const toggleExternalEdges = requiredElement<HTMLInputElement>("toggleExternalEdges");
 const toggleLlmSummary = requiredElement<HTMLInputElement>("toggleLlmSummary");
+const toggleScalabilityMode = requiredElement<HTMLInputElement>("toggleScalabilityMode");
 const toggleOrphanModules = requiredElement<HTMLInputElement>("toggleOrphanModules");
 const toggleGodFiles = requiredElement<HTMLInputElement>("toggleGodFiles");
 const statusLabel = requiredElement<HTMLParagraphElement>("status");
+const architectureChecksStatus = requiredElement<HTMLParagraphElement>("architectureChecksStatus");
+
+interface WorkerAnalyzeRequest {
+  type: "analyze";
+  requestId: number;
+  zipBuffer: ArrayBuffer;
+}
+
+interface WorkerProgressMessage {
+  type: "progress";
+  requestId: number;
+  progress: AnalysisProgress;
+}
+
+interface WorkerResultMessage {
+  type: "result";
+  requestId: number;
+  graph: GraphData;
+}
+
+interface WorkerErrorMessage {
+  type: "error";
+  requestId: number;
+  message: string;
+}
+
+type WorkerMessage = WorkerProgressMessage | WorkerResultMessage | WorkerErrorMessage;
+
+function setAnalysisLoadingState(isLoading: boolean): void {
+  fileInput.disabled = isLoading;
+  sampleButton.disabled = isLoading;
+  loadGithubRepoButton.disabled = isLoading;
+  githubRepoInput.disabled = isLoading;
+}
+
+function formatAnalysisProgress(progress: AnalysisProgress, label: string): string {
+  const base = `Scalability mode: ${label}`;
+  if (progress.stage === "loading") {
+    return `${base} - opening archive...`;
+  }
+  if (progress.stage === "reading-files") {
+    return `${base} - reading files (${progress.processedFiles}/${progress.totalFiles})${progress.currentPath ? `: ${progress.currentPath}` : ""}`;
+  }
+  if (progress.stage === "building-graph") {
+    return `${base} - building dependency graph (${progress.processedFiles}/${progress.totalFiles})...`;
+  }
+  return `${base} - analysis complete.`;
+}
+
+let analysisWorker: Worker | null = null;
+let analysisRequestCounter = 0;
+
+function getAnalysisWorker(): Worker | null {
+  if (!("Worker" in window)) return null;
+  if (!analysisWorker) {
+    analysisWorker = new Worker(new URL("./analysisWorker.ts", import.meta.url), { type: "module" });
+  }
+  return analysisWorker;
+}
+
+async function analyzeZipBuffer(zipBuffer: ArrayBuffer, label: string): Promise<GraphData> {
+  if (!filterState.scalabilityMode) {
+    return createGraphFromZipBuffer(zipBuffer);
+  }
+
+  const worker = getAnalysisWorker();
+  if (!worker) {
+    return createGraphFromZipBuffer(zipBuffer);
+  }
+
+  return new Promise<GraphData>((resolve, reject) => {
+    const requestId = ++analysisRequestCounter;
+
+    const cleanup = (): void => {
+      worker.removeEventListener("message", handleMessage);
+      worker.removeEventListener("error", handleError);
+    };
+
+    const handleError = (): void => {
+      cleanup();
+      reject(new Error("Web Worker analysis failed."));
+    };
+
+    const handleMessage = (event: MessageEvent): void => {
+      const message = event.data as WorkerMessage;
+      if (message.requestId !== requestId) return;
+
+      if (message.type === "progress") {
+        setStatus(formatAnalysisProgress(message.progress, label));
+        return;
+      }
+
+      cleanup();
+
+      if (message.type === "error") {
+        reject(new Error(message.message));
+        return;
+      }
+
+      resolve(message.graph);
+    };
+
+    worker.addEventListener("message", handleMessage);
+    worker.addEventListener("error", handleError);
+    setStatus(`Scalability mode: analyzing ${label} in a Web Worker...`);
+    worker.postMessage({ type: "analyze", requestId, zipBuffer } satisfies WorkerAnalyzeRequest, [zipBuffer]);
+  });
+}
 const detailsPanel = requiredElement<HTMLDivElement>("details");
 
 function playGalaxyEntryAnimation(): void {
@@ -138,6 +249,10 @@ function playGalaxyEntryAnimation(): void {
 
 function setStatus(text: string): void {
   statusLabel.textContent = text;
+}
+
+function setArchitectureChecksStatus(text: string): void {
+  architectureChecksStatus.textContent = text;
 }
 function normalizeText(value: string): string {
   return value.toLowerCase().replace(/\\/g, "/");
@@ -475,7 +590,7 @@ let cy = createViewer({
 let currentGraph: GraphData = normalizeSampleGraph(graph);
 let lastSearchMatches: Set<string> = new Set();
 
-function applyFilters(options: { fit?: boolean } = {}): { visibleCount: number; matchedSearchCount: number } {
+function applyFilters(options: { fit?: boolean } = {}): { visibleCount: number; matchedSearchCount: number; matchedAdvancedCount: number } {
   const { fit = false } = options;
 
   const nodes = cy.nodes().filter(node => !node.hasClass("twinkle-star"));
@@ -494,6 +609,7 @@ function applyFilters(options: { fit?: boolean } = {}): { visibleCount: number; 
 
   let visibleNodeIds = new Set(nodes.map(node => node.id()));
   let matchedSearchCount = 0;
+  let matchedAdvancedCount = 0;
 
   if (filterState.searchQuery) {
     const matches = nodes.filter(node => {
@@ -521,17 +637,16 @@ function applyFilters(options: { fit?: boolean } = {}): { visibleCount: number; 
       return matchesSemanticQuery(path, filterState.advancedQuery);
     });
 
-    if (semanticMatches.length > 0) {
-      const semanticContext = new Set<string>();
-      semanticMatches.forEach(node => {
-        semanticContext.add(node.id());
-        node.connectedEdges().forEach(edge => {
-          semanticContext.add(edge.source().id());
-          semanticContext.add(edge.target().id());
-        });
+    matchedAdvancedCount = semanticMatches.length;
+    const semanticContext = new Set<string>();
+    semanticMatches.forEach(node => {
+      semanticContext.add(node.id());
+      node.connectedEdges().forEach(edge => {
+        semanticContext.add(edge.source().id());
+        semanticContext.add(edge.target().id());
       });
-      visibleNodeIds = intersects(visibleNodeIds, semanticContext);
-    }
+    });
+    visibleNodeIds = intersects(visibleNodeIds, semanticContext);
   }
 
   // Risk score filter
@@ -637,7 +752,7 @@ function applyFilters(options: { fit?: boolean } = {}): { visibleCount: number; 
     cy.fit(visibleNodes, 80);
   }
 
-  return { visibleCount: visibleNodes.length, matchedSearchCount };
+  return { visibleCount: visibleNodes.length, matchedSearchCount, matchedAdvancedCount };
 }
 
 function resetAllFilters(): void {
@@ -654,6 +769,7 @@ function resetAllFilters(): void {
   filterState.showExternalEdges = true;
   filterState.showOrphanModulesOnly = false;
   filterState.highlightGodFiles = false;
+  filterState.scalabilityMode = false;
   filterState.clusteringMode = "directory";
   filterState.minRiskScore = 0;
 
@@ -669,6 +785,7 @@ function resetAllFilters(): void {
   toggleExternalEdges.checked = true;
   toggleOrphanModules.checked = false;
   toggleGodFiles.checked = false;
+  toggleScalabilityMode.checked = false;
   toggleClusteringMode.checked = false;
   riskFilterRange.value = "0";
 
@@ -679,6 +796,7 @@ function resetAllFilters(): void {
   // Update labels
   formatTopDependedLabel(filterState.topDependedPercent);
   formatRiskFilterLabel(filterState.minRiskScore);
+  setArchitectureChecksStatus("Architecture checks inactive.");
 
   // Clear selection and apply filters
   cy.nodes().unselect();
@@ -750,11 +868,14 @@ function reloadViewer(nextGraph: GraphData): void {
     container,
     graph: nextGraph,
     onNodeSelect: renderDetails,
-    clusteringMode: filterState.clusteringMode
+    clusteringMode: filterState.clusteringMode,
+    progressiveRender: filterState.scalabilityMode,
+    onReady: () => {
+      applyFilters();
+      renderDetails(null);
+      playGalaxyEntryAnimation();
+    }
   });
-  applyFilters();
-  renderDetails(null);
-  playGalaxyEntryAnimation();
 }
 
 sampleButton.addEventListener("click", () => {
@@ -767,9 +888,11 @@ fileInput.addEventListener("change", async event => {
   const file = target.files?.[0];
   if (!file) return;
 
+  setAnalysisLoadingState(true);
   setStatus(`Analyzing ${file.name}...`);
   try {
-    const analyzed = await createGraphFromZip(file);
+    const zipBuffer = await file.arrayBuffer();
+    const analyzed = await analyzeZipBuffer(zipBuffer, file.name);
     reloadViewer(analyzed);
     setStatus(
       `Loaded ${analyzed.nodes.length} nodes, ${analyzed.edges.length} edges. ` +
@@ -778,6 +901,8 @@ fileInput.addEventListener("change", async event => {
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";
     setStatus(`Failed to analyze zip: ${message}`);
+  } finally {
+    setAnalysisLoadingState(false);
   }
 });
 
@@ -789,12 +914,12 @@ loadGithubRepoButton.addEventListener("click", async () => {
   }
 
   setGithubLoadingState(true);
+  setAnalysisLoadingState(true);
   try {
     const parsed = parseGitHubRepoInput(rawInput);
     setStatus(`Downloading ${parsed.owner}/${parsed.repo} from GitHub...`);
     const { zipBuffer, resolvedRef } = await downloadGitHubZip(parsed);
-    setStatus(`Analyzing ${parsed.owner}/${parsed.repo}@${resolvedRef}...`);
-    const analyzed = await createGraphFromZipBuffer(zipBuffer);
+    const analyzed = await analyzeZipBuffer(zipBuffer, `${parsed.owner}/${parsed.repo}@${resolvedRef}`);
     reloadViewer(analyzed);
     setStatus(
       `Loaded ${analyzed.nodes.length} nodes, ${analyzed.edges.length} edges from ${parsed.owner}/${parsed.repo}@${resolvedRef}. ` +
@@ -804,6 +929,7 @@ loadGithubRepoButton.addEventListener("click", async () => {
     const message = error instanceof Error ? error.message : "Unknown error";
     setStatus(`Failed to load GitHub repo: ${message}`);
   } finally {
+    setAnalysisLoadingState(false);
     setGithubLoadingState(false);
   }
 });
@@ -904,10 +1030,19 @@ toggleExternalEdges.addEventListener("change", () => {
   applySemanticToggleStatus();
 });
 
+toggleScalabilityMode.addEventListener("change", () => {
+  filterState.scalabilityMode = toggleScalabilityMode.checked;
+  setStatus(
+    filterState.scalabilityMode
+      ? "Scalability mode enabled. Large repos will use worker analysis and progressive rendering."
+      : "Scalability mode disabled. Loading uses the regular single-pass path."
+  );
+});
+
 toggleOrphanModules.addEventListener("change", () => {
   filterState.showOrphanModulesOnly = toggleOrphanModules.checked;
   const result = applyFilters();
-  setStatus(
+  setArchitectureChecksStatus(
     filterState.showOrphanModulesOnly
       ? `Orphan-module check enabled. Visible nodes: ${result.visibleCount}.`
       : `Orphan-module check disabled. Visible nodes: ${result.visibleCount}.`
@@ -917,7 +1052,7 @@ toggleOrphanModules.addEventListener("change", () => {
 toggleGodFiles.addEventListener("change", () => {
   filterState.highlightGodFiles = toggleGodFiles.checked;
   const result = applyFilters();
-  setStatus(
+  setArchitectureChecksStatus(
     filterState.highlightGodFiles
       ? `God-file heuristic highlighting enabled. Visible nodes: ${result.visibleCount}.`
       : `God-file heuristic highlighting disabled. Visible nodes: ${result.visibleCount}.`
@@ -966,8 +1101,8 @@ advancedSearchButton.addEventListener("click", () => {
     return;
   }
 
-  if (result.matchedSearchCount > 0 || result.visibleCount > 0) {
-    setStatus(`Semantic search applied for "${filterState.advancedQuery}". Visible nodes: ${result.visibleCount}.`);
+  if (result.matchedAdvancedCount > 0) {
+    setStatus(`Semantic search matched ${result.matchedAdvancedCount} node(s) for "${filterState.advancedQuery}". Visible nodes: ${result.visibleCount}.`);
   } else {
     setStatus(`No results for semantic query "${filterState.advancedQuery}". Try: auth-logic, database-layer, api-endpoints, ui-components, testing`);
   }
