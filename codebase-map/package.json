@@ -15,6 +15,7 @@
   },
   "dependencies": {
     "cytoscape": "^3.33.1",
+    "jspdf": "^4.2.1",
     "jszip": "^3.10.1"
   }
 }

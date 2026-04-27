@@ -19,8 +19,13 @@
       </div>
       <p class="muted">Sprint 1 Integration + QA Workspace</p>
 
-      <section class="control-section">
-        <h3>Data Source</h3>
+      <label for="viewModeSelect"><strong>View Mode</strong></label>
+      <select id="viewModeSelect">
+        <option value="single" selected>Single</option>
+        <option value="comparison">Comparison</option>
+      </select>
+
+      <div id="singleModeControls" class="mode-section">
         <label for="repoZipInput"><strong>Load Repo Zip</strong></label>
         <input id="repoZipInput" type="file" accept=".zip" />
         <label for="githubRepoInput"><strong>Load Public GitHub Repo</strong></label>
@@ -29,7 +34,33 @@
           <button id="loadGithubRepo" type="button">Load</button>
         </div>
         <button id="loadSample" type="button">Load Sample</button>
-      </section>
+      </div>
+
+      <div id="comparisonModeControls" class="mode-section" hidden>
+        <h3>Before / After Compare</h3>
+        <p class="muted-inline">Compare two snapshots and highlight differences side by side.</p>
+
+        <label for="compareRepoInput"><strong>Compare Repo Refs</strong></label>
+        <input id="compareRepoInput" type="text" placeholder="https://github.com/owner/repo or owner/repo" />
+        <div class="comparison-grid">
+          <label for="compareBeforeRefInput">Before ref</label>
+          <input id="compareBeforeRefInput" type="text" placeholder="main" />
+          <label for="compareAfterRefInput">After ref</label>
+          <input id="compareAfterRefInput" type="text" placeholder="feature-branch or commit SHA" />
+        </div>
+        <button id="compareRepoButton" type="button">Compare Repo Refs</button>
+
+        <label for="compareBeforeZipInput"><strong>Compare Zip Files</strong></label>
+        <div class="comparison-grid">
+          <label for="compareBeforeZipInput">Before zip</label>
+          <input id="compareBeforeZipInput" type="file" accept=".zip" />
+          <label for="compareAfterZipInput">After zip</label>
+          <input id="compareAfterZipInput" type="file" accept=".zip" />
+        </div>
+        <button id="compareZipButton" type="button">Compare Zip Files</button>
+      </div>
+
+      <hr />
 
       <section class="control-section">
         <h3>Navigation</h3>
@@ -70,6 +101,8 @@
           <option value="outgoing">Outgoing only</option>
         </select>
 
+      <p class="filter-title"><strong>AI Summary</strong></p>
+      <label class="checkbox-row"><input id="toggleLlmSummary" type="checkbox" checked /> Use LLM server summary (optional)</label>
         <label for="riskFilterRange"><strong>Risk Score Filter</strong></label>
         <div class="stacked-control">
           <input id="riskFilterRange" type="range" min="0" max="15" step="0.5" value="0" />
@@ -98,6 +131,24 @@
         <label class="checkbox-row"><input id="toggleExternalEdges" type="checkbox" checked /> External dependencies</label>
       </section>
 
+      <h3>Export</h3>
+      <button id="exportPng" type="button">Export PNG Snapshot</button>
+      <button id="exportPdf" type="button">Export PDF Report</button>
+      <button id="exportJson" type="button">Export JSON Metrics</button>
+      <button id="exportCsv" type="button">Export CSV Metrics</button>
+      <button id="exportRisk" type="button">Export Architecture Risk</button>
+
+      <hr />
+
+      <h3>Legend</h3>
+      <p>Node: file</p>
+      <p>External node: package</p>
+      <p>Node size: file size</p>
+      <p>Color: directory cluster</p>
+      <p>Pink glow: critical/highly depended-on file</p>
+      <p>Yellow glow: medium architectural risk</p>
+      <p>Dashed edge: dynamic import</p>
+      <p>Orange edge: external dependency</p>
       <section class="control-section">
         <h3>Architecture Checks</h3>
         <label class="checkbox-row"><input id="toggleOrphanModules" type="checkbox" /> Show orphan modules only</label>
@@ -110,6 +161,17 @@
       <div id="emptyStatePrompt" aria-live="polite">
         Upload a repo zip, add a GitHub link, or load the sample project to begin.
       </div>
+    </div>
+    <div id="graphArea">
+      <div id="graphPanePrimary" class="graph-pane">
+        <p id="paneBeforeLabel" class="pane-label" hidden>Before</p>
+        <div id="cy"></div>
+      </div>
+      <div id="graphPaneSecondary" class="graph-pane" hidden>
+        <p id="paneAfterLabel" class="pane-label" hidden>After</p>
+        <div id="cySecondary"></div>
+      </div>
+    </div>
     </main>
 
     <aside id="inspector">

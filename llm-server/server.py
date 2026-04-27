@@ -4,6 +4,8 @@ Local server for CodeCity integrations:
 - GitHub archive proxy for repo ingestion
 """
 from urllib.parse import quote
+import os
+import re
 
 from fastapi import FastAPI, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
@@ -28,7 +30,17 @@ app.add_middleware(
 
 # Ollama API endpoint
 OLLAMA_URL = "http://localhost:11434"
-MODEL_NAME = "codellama:7b-instruct"
+GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
+LLM_PROVIDER = os.getenv("LLM_PROVIDER", "ollama").strip().lower()
+MODEL_NAME = os.getenv(
+    "LLM_MODEL",
+    "gemini-2.5-flash" if LLM_PROVIDER == "gemini" else "codellama:7b-instruct"
+).strip()
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
+
+if LLM_PROVIDER not in {"ollama", "gemini"}:
+    logger.warning("Unsupported LLM_PROVIDER '%s'. Falling back to 'ollama'.", LLM_PROVIDER)
+    LLM_PROVIDER = "ollama"
 
 class FileSummaryRequest(BaseModel):
     file_path: str
@@ -60,7 +72,23 @@ async def root():
 
 @app.get("/api/health")
 async def health_check():
-    """Check if Ollama is running and model is available"""
+    """Check active provider health and model availability."""
+    if LLM_PROVIDER == "gemini":
+        if not GEMINI_API_KEY:
+            return {
+                "provider": "gemini",
+                "status": "not configured",
+                "model_available": False,
+                "model": MODEL_NAME,
+                "error": "GEMINI_API_KEY is not set"
+            }
+        return {
+            "provider": "gemini",
+            "status": "configured",
+            "model_available": True,
+            "model": MODEL_NAME
+        }
+
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
             response = await client.get(f"{OLLAMA_URL}/api/tags")
@@ -70,16 +98,124 @@ async def health_check():
                     MODEL_NAME in model.get("name", "") for model in models
                 )
                 return {
-                    "ollama": "running",
+                    "provider": "ollama",
+                    "status": "running",
                     "model_available": model_available,
                     "model": MODEL_NAME
                 }
+            return {
+                "provider": "ollama",
+                "status": "error",
+                "model_available": False,
+                "model": MODEL_NAME,
+                "error": f"Unexpected status from Ollama: {response.status_code}"
+            }
     except Exception as e:
         logger.error(f"Ollama health check failed: {e}")
         return {
-            "ollama": "not running",
+            "provider": "ollama",
+            "status": "not running",
+            "model_available": False,
+            "model": MODEL_NAME,
             "error": str(e)
         }
+
+
+def _extract_gemini_text(payload: dict) -> str:
+    candidates = payload.get("candidates", [])
+    if not candidates:
+        return ""
+
+    parts = candidates[0].get("content", {}).get("parts", [])
+    text_parts: list[str] = []
+    for part in parts:
+        text = part.get("text")
+        if isinstance(text, str):
+            text_parts.append(text)
+    return "\n".join(text_parts).strip()
+
+
+def _summary_is_too_short(summary: str) -> bool:
+    normalized = summary.strip()
+    if len(normalized) < 80:
+        return True
+
+    sentence_count = len(re.findall(r"[.!?](?:\s|$)", normalized))
+    return sentence_count < 2
+
+
+async def _generate_summary_with_ollama(prompt: str) -> str:
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        response = await client.post(
+            f"{OLLAMA_URL}/api/generate",
+            json={
+                "model": MODEL_NAME,
+                "prompt": prompt,
+                "stream": False,
+                "options": {
+                    "temperature": 0.7,
+                    "num_predict": 150
+                }
+            }
+        )
+
+    if response.status_code != 200:
+        logger.error("Ollama API error: %s", response.status_code)
+        raise HTTPException(status_code=503, detail="LLM service unavailable")
+
+    result = response.json()
+    summary = result.get("response", "").strip()
+    if not summary:
+        raise HTTPException(status_code=500, detail="LLM returned empty response")
+    return summary
+
+
+async def _generate_summary_with_gemini(prompt: str) -> str:
+    if not GEMINI_API_KEY:
+        raise HTTPException(
+            status_code=503,
+            detail="Gemini is selected but GEMINI_API_KEY is not set."
+        )
+
+    endpoint = f"{GEMINI_API_BASE}/{MODEL_NAME}:generateContent"
+    prompts = [
+        prompt,
+        (
+            f"{prompt}\n\n"
+            "Return one paragraph of exactly 3 complete sentences, at least 90 characters total. "
+            "Do not return sentence fragments, headings, bullets, or just the filename."
+        ),
+    ]
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        for attempt_prompt in prompts:
+            payload = {
+                "contents": [{"parts": [{"text": attempt_prompt}]}],
+                "generationConfig": {
+                    "temperature": 0.6,
+                    "maxOutputTokens": 512,
+                    "responseMimeType": "text/plain",
+                    "thinkingConfig": {
+                        "thinkingBudget": 0
+                    }
+                },
+            }
+
+            response = await client.post(
+                endpoint,
+                params={"key": GEMINI_API_KEY},
+                json=payload,
+            )
+
+            if response.status_code != 200:
+                logger.error("Gemini API error: %s %s", response.status_code, response.text)
+                raise HTTPException(status_code=503, detail="Gemini service unavailable")
+
+            summary = _extract_gemini_text(response.json())
+            if summary and not _summary_is_too_short(summary):
+                return summary
+
+    raise HTTPException(status_code=500, detail="Gemini returned incomplete response")
 
 
 @app.post("/api/analyze_file")
@@ -120,49 +256,24 @@ Write a concise technical summary in 2-4 sentences that covers:
 
 Avoid vague language and avoid stating uncertainty."""
 
-        # Call Ollama API
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.post(
-                f"{OLLAMA_URL}/api/generate",
-                json={
-                    "model": MODEL_NAME,
-                    "prompt": prompt,
-                    "stream": False,
-                    "options": {
-                        "temperature": 0.7,
-                        "num_predict": 150
-                    }
-                }
-            )
-            
-            if response.status_code != 200:
-                logger.error(f"Ollama API error: {response.status_code}")
-                raise HTTPException(
-                    status_code=503,
-                    detail="LLM service unavailable"
-                )
-            
-            result = response.json()
-            summary = result.get("response", "").strip()
-            
-            if not summary:
-                raise HTTPException(
-                    status_code=500,
-                    detail="LLM returned empty response"
-                )
-            
-            return {
-                "description": summary,
-                "complexity": complexity,
-                "dependencies": request.related_files[:6],
-                "source": "codellama-local"
-            }
-            
+        if LLM_PROVIDER == "gemini":
+            summary = await _generate_summary_with_gemini(prompt)
+        else:
+            summary = await _generate_summary_with_ollama(prompt)
+
+        return {
+            "description": summary,
+            "complexity": complexity,
+            "dependencies": request.related_files[:6],
+            "source": f"{LLM_PROVIDER}:{MODEL_NAME}"
+        }
+    except HTTPException:
+        raise
     except httpx.ConnectError:
-        logger.error("Cannot connect to Ollama. Is it running?")
+        logger.error("Cannot connect to LLM provider endpoint.")
         raise HTTPException(
             status_code=503,
-            detail="Ollama is not running. Please start Ollama first."
+            detail="LLM service is not reachable. Verify provider configuration."
         )
     except httpx.TimeoutException:
         logger.error("Ollama request timed out")
