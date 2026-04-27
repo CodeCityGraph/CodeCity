@@ -1,5 +1,5 @@
 import graph from "./graph.json";
-import { createGraphFromZip, createGraphFromZipBuffer } from "./analyzer";
+import { createGraphFromZipBuffer, type AnalysisProgress } from "./analyzer";
 import type { GraphData } from "./types";
 import { createViewer } from "./viewer";
 import {
@@ -9,6 +9,8 @@ import {
   exportMetricsJson,
   exportPdfReport
 } from "./reporting";
+import { matchesSemanticQuery } from "./semanticSearch";
+import type { ClusteringMode } from "./layout";
 import "./style.css";
 
 const LLM_API_URL = "http://localhost:8002";
@@ -22,6 +24,8 @@ type ViewMode = "single" | "comparison";
 
 interface FilterState {
   searchQuery: string;
+  advancedQuery: string;
+  useSemanticSearch: boolean;
   topDependedPercent: number;
   neighborhoodHops: number;
   edgeDirection: EdgeDirection;
@@ -29,6 +33,11 @@ interface FilterState {
   showDynamicEdges: boolean;
   showInternalEdges: boolean;
   showExternalEdges: boolean;
+  showOrphanModulesOnly: boolean;
+  highlightGodFiles: boolean;
+  scalabilityMode: boolean;
+  clusteringMode: ClusteringMode;
+  minRiskScore: number;
 }
 
 interface GitHubRepoInput {
@@ -50,13 +59,20 @@ interface ComparisonSummary {
 
 const filterState: FilterState = {
   searchQuery: "",
+  advancedQuery: "",
+  useSemanticSearch: false,
   topDependedPercent: 100,
   neighborhoodHops: 1,
   edgeDirection: "all",
   showStaticEdges: true,
   showDynamicEdges: true,
   showInternalEdges: true,
-  showExternalEdges: true
+  showExternalEdges: true,
+  showOrphanModulesOnly: false,
+  highlightGodFiles: false,
+  scalabilityMode: true,
+  clusteringMode: "directory",
+  minRiskScore: 0
 };
 
 function normalizeSampleGraph(raw: typeof graph): GraphData {
@@ -127,16 +143,130 @@ const compareAfterZipInput = requiredElement<HTMLInputElement>("compareAfterZipI
 const compareZipButton = requiredElement<HTMLButtonElement>("compareZipButton");
 const searchInput = requiredElement<HTMLInputElement>("searchInput");
 const focusButton = requiredElement<HTMLButtonElement>("focusButton");
+const resetFiltersButton = requiredElement<HTMLButtonElement>("resetFiltersButton");
 const topDependedRange = requiredElement<HTMLInputElement>("topDependedRange");
 const topDependedValue = requiredElement<HTMLParagraphElement>("topDependedValue");
 const neighborhoodSelect = requiredElement<HTMLSelectElement>("neighborhoodSelect");
 const edgeDirectionSelect = requiredElement<HTMLSelectElement>("edgeDirectionSelect");
+const toggleClusteringMode = requiredElement<HTMLInputElement>("toggleClusteringMode");
+const advancedQueryInput = requiredElement<HTMLInputElement>("advancedQueryInput");
+const advancedSearchButton = requiredElement<HTMLButtonElement>("advancedSearchButton");
+const riskFilterRange = requiredElement<HTMLInputElement>("riskFilterRange");
+const riskFilterValue = requiredElement<HTMLParagraphElement>("riskFilterValue");
 const toggleStaticEdges = requiredElement<HTMLInputElement>("toggleStaticEdges");
 const toggleDynamicEdges = requiredElement<HTMLInputElement>("toggleDynamicEdges");
 const toggleInternalEdges = requiredElement<HTMLInputElement>("toggleInternalEdges");
 const toggleExternalEdges = requiredElement<HTMLInputElement>("toggleExternalEdges");
 const toggleLlmSummary = requiredElement<HTMLInputElement>("toggleLlmSummary");
+const toggleScalabilityMode = requiredElement<HTMLInputElement>("toggleScalabilityMode");
+const toggleOrphanModules = requiredElement<HTMLInputElement>("toggleOrphanModules");
+const toggleGodFiles = requiredElement<HTMLInputElement>("toggleGodFiles");
 const statusLabel = requiredElement<HTMLParagraphElement>("status");
+const architectureChecksStatus = requiredElement<HTMLParagraphElement>("architectureChecksStatus");
+const emptyStatePrompt = requiredElement<HTMLDivElement>("emptyStatePrompt");
+
+interface WorkerAnalyzeRequest {
+  type: "analyze";
+  requestId: number;
+  zipBuffer: ArrayBuffer;
+}
+
+interface WorkerProgressMessage {
+  type: "progress";
+  requestId: number;
+  progress: AnalysisProgress;
+}
+
+interface WorkerResultMessage {
+  type: "result";
+  requestId: number;
+  graph: GraphData;
+}
+
+interface WorkerErrorMessage {
+  type: "error";
+  requestId: number;
+  message: string;
+}
+
+type WorkerMessage = WorkerProgressMessage | WorkerResultMessage | WorkerErrorMessage;
+
+function setAnalysisLoadingState(isLoading: boolean): void {
+  fileInput.disabled = isLoading;
+  sampleButton.disabled = isLoading;
+  loadGithubRepoButton.disabled = isLoading;
+  githubRepoInput.disabled = isLoading;
+}
+
+function formatAnalysisProgress(progress: AnalysisProgress, label: string): string {
+  const base = `${label}`;
+  if (progress.stage === "loading") {
+    return `${base} - opening archive...`;
+  }
+  if (progress.stage === "reading-files") {
+    return `${base} - reading files (${progress.processedFiles}/${progress.totalFiles})${progress.currentPath ? `: ${progress.currentPath}` : ""}`;
+  }
+  if (progress.stage === "building-graph") {
+    return `${base} - building dependency graph (${progress.processedFiles}/${progress.totalFiles})...`;
+  }
+  return `${base} - analysis complete.`;
+}
+
+let analysisWorker: Worker | null = null;
+let analysisRequestCounter = 0;
+
+function getAnalysisWorker(): Worker | null {
+  if (!("Worker" in window)) return null;
+  if (!analysisWorker) {
+    analysisWorker = new Worker(new URL("./analysisWorker.ts", import.meta.url), { type: "module" });
+  }
+  return analysisWorker;
+}
+
+async function analyzeZipBuffer(zipBuffer: ArrayBuffer, label: string): Promise<GraphData> {
+  const worker = getAnalysisWorker();
+  if (!worker) {
+    return createGraphFromZipBuffer(zipBuffer);
+  }
+
+  return new Promise<GraphData>((resolve, reject) => {
+    const requestId = ++analysisRequestCounter;
+
+    const cleanup = (): void => {
+      worker.removeEventListener("message", handleMessage);
+      worker.removeEventListener("error", handleError);
+    };
+
+    const handleError = (): void => {
+      cleanup();
+      reject(new Error("Web Worker analysis failed."));
+    };
+
+    const handleMessage = (event: MessageEvent): void => {
+      const message = event.data as WorkerMessage;
+      if (message.requestId !== requestId) return;
+
+      if (message.type === "progress") {
+        setStatus(formatAnalysisProgress(message.progress, label));
+        return;
+      }
+
+      cleanup();
+
+      if (message.type === "error") {
+        reject(new Error(message.message));
+        return;
+      }
+
+      resolve(message.graph);
+    };
+
+    worker.addEventListener("message", handleMessage);
+    worker.addEventListener("error", handleError);
+    setStatus(`Analyzing ${label} in a Web Worker...`);
+    worker.postMessage({ type: "analyze", requestId, zipBuffer } satisfies WorkerAnalyzeRequest, [zipBuffer]);
+  });
+}
 const detailsPanel = requiredElement<HTMLDivElement>("details");
 const exportPngButton = requiredElement<HTMLButtonElement>("exportPng");
 const exportPdfButton = requiredElement<HTMLButtonElement>("exportPdf");
@@ -156,6 +286,9 @@ function setStatus(text: string): void {
   statusLabel.textContent = text;
 }
 
+function setArchitectureChecksStatus(text: string): void {
+  architectureChecksStatus.textContent = text;
+}
 function normalizeText(value: string): string {
   return value.toLowerCase().replace(/\\/g, "/");
 }
@@ -581,6 +714,60 @@ function getNeighborhood(nodeId: string, hops: number): Set<string> {
   return visited;
 }
 
+function getOrphanModuleIds(): Set<string> {
+  const orphanIds = new Set<string>();
+  cy
+    .$("node")
+    .filter(node => !node.hasClass("twinkle-star") && node.data("category") === "source")
+    .forEach(node => {
+      const inDegree = Number(node.data("inDegree") ?? 0);
+      const outDegree = Number(node.data("outDegree") ?? 0);
+      if (inDegree === 0 && outDegree === 0) {
+        orphanIds.add(node.id());
+      }
+    });
+  return orphanIds;
+}
+
+function percentile(values: number[], ratio: number): number {
+  if (values.length === 0) return 0;
+  const sorted = [...values].sort((a, b) => a - b);
+  const clamped = Math.max(0, Math.min(1, ratio));
+  const index = Math.min(sorted.length - 1, Math.floor(clamped * (sorted.length - 1)));
+  return sorted[index];
+}
+
+function getGodFileIds(): Set<string> {
+  const sourceNodes = cy
+    .$("node")
+    .filter(node => !node.hasClass("twinkle-star") && node.data("category") === "source")
+    .toArray();
+
+  if (sourceNodes.length === 0) return new Set<string>();
+
+  const locValues = sourceNodes.map(node => Number(node.data("loc") ?? 0));
+  const inDegreeValues = sourceNodes.map(node => Number(node.data("inDegree") ?? 0));
+  const outDegreeValues = sourceNodes.map(node => Number(node.data("outDegree") ?? 0));
+
+  const locThreshold = percentile(locValues, 0.85);
+  const inDegreeThreshold = percentile(inDegreeValues, 0.85);
+  const outDegreeThreshold = percentile(outDegreeValues, 0.85);
+
+  const godIds = new Set<string>();
+  sourceNodes.forEach(node => {
+    const loc = Number(node.data("loc") ?? 0);
+    const inDegree = Number(node.data("inDegree") ?? 0);
+    const outDegree = Number(node.data("outDegree") ?? 0);
+    const hasHighLoc = loc >= locThreshold;
+    const hasHighCoupling = inDegree >= inDegreeThreshold || outDegree >= outDegreeThreshold;
+    if (hasHighLoc && hasHighCoupling) {
+      godIds.add(node.id());
+    }
+  });
+
+  return godIds;
+}
+
 function escapeHtml(value: string): string {
   return value
     .replaceAll("&", "&amp;")
@@ -684,6 +871,19 @@ let currentGraphData: GraphData = initialGraph;
 let cy = createViewer({
   container,
   graph: initialGraph,
+const EMPTY_GRAPH: GraphData = {
+  nodes: [],
+  edges: [],
+  unresolvedImports: []
+};
+
+function updateEmptyStatePrompt(isEmpty: boolean): void {
+  emptyStatePrompt.classList.toggle("hidden", !isEmpty);
+}
+
+let cy = createViewer({
+  container,
+  graph: EMPTY_GRAPH,
   onNodeSelect: renderDetails
 });
 let cySecondary: ReturnType<typeof createViewer> | null = null;
@@ -698,17 +898,46 @@ async function runExport(task: () => void | Promise<void>, successMessage: strin
   }
 }
 
-function applyFilters(options: { fit?: boolean } = {}): { visibleCount: number; matchedSearchCount: number } {
+let currentGraph: GraphData = EMPTY_GRAPH;
+let lastSearchMatches: Set<string> = new Set();
+let graphDerivedDataDirty = true;
+let cachedOrphanIds: Set<string> = new Set();
+let cachedGodFileIds: Set<string> = new Set();
+
+function markGraphDerivedDataDirty(): void {
+  graphDerivedDataDirty = true;
+}
+
+function ensureGraphDerivedData(): void {
+  if (!graphDerivedDataDirty) return;
+  cachedOrphanIds = getOrphanModuleIds();
+  cachedGodFileIds = getGodFileIds();
+  graphDerivedDataDirty = false;
+}
+
+function applyFilters(options: { fit?: boolean } = {}): { visibleCount: number; matchedSearchCount: number; matchedAdvancedCount: number } {
   const { fit = false } = options;
 
   const nodes = cy.nodes().filter(node => !node.hasClass("twinkle-star"));
   const edges = cy.edges();
 
-  nodes.removeClass("dimmed focus-primary focus-secondary");
-  edges.removeClass("dimmed edge-incoming edge-outgoing");
+  ensureGraphDerivedData();
+  const orphanIds = cachedOrphanIds;
+  const godFileIds = cachedGodFileIds;
+
+  cy.batch(() => {
+    nodes.removeClass("dimmed focus-primary focus-secondary orphan-node god-file-node");
+    edges.removeClass("dimmed edge-incoming edge-outgoing");
+
+    nodes.forEach(node => {
+      if (orphanIds.has(node.id())) node.addClass("orphan-node");
+      if (filterState.highlightGodFiles && godFileIds.has(node.id())) node.addClass("god-file-node");
+    });
+  });
 
   let visibleNodeIds = new Set(nodes.map(node => node.id()));
   let matchedSearchCount = 0;
+  let matchedAdvancedCount = 0;
 
   if (filterState.searchQuery) {
     const matches = nodes.filter(node => {
@@ -717,6 +946,7 @@ function applyFilters(options: { fit?: boolean } = {}): { visibleCount: number; 
     });
 
     matchedSearchCount = matches.length;
+    lastSearchMatches = new Set(matches.map(m => m.id())); // Track matched nodes for focused fit
     const searchContext = new Set<string>();
     matches.forEach(node => {
       searchContext.add(node.id());
@@ -728,9 +958,44 @@ function applyFilters(options: { fit?: boolean } = {}): { visibleCount: number; 
     visibleNodeIds = intersects(visibleNodeIds, searchContext);
   }
 
+  // Semantic/Advanced search filter
+  if (filterState.advancedQuery) {
+    const semanticMatches = nodes.filter(node => {
+      const path = String(node.data("path") ?? node.id());
+      return matchesSemanticQuery(path, filterState.advancedQuery);
+    });
+
+    matchedAdvancedCount = semanticMatches.length;
+    const semanticContext = new Set<string>();
+    semanticMatches.forEach(node => {
+      semanticContext.add(node.id());
+      node.connectedEdges().forEach(edge => {
+        semanticContext.add(edge.source().id());
+        semanticContext.add(edge.target().id());
+      });
+    });
+    visibleNodeIds = intersects(visibleNodeIds, semanticContext);
+  }
+
+  // Risk score filter
+  if (filterState.minRiskScore > 0) {
+    const riskMatches = new Set<string>();
+    nodes.forEach(node => {
+      const riskScore = Number(node.data("riskScore") ?? 0);
+      if (riskScore >= filterState.minRiskScore) {
+        riskMatches.add(node.id());
+      }
+    });
+    visibleNodeIds = intersects(visibleNodeIds, riskMatches);
+  }
+
   if (filterState.topDependedPercent < 100) {
     const topContext = getTopDependedNodeContext(filterState.topDependedPercent);
     visibleNodeIds = intersects(visibleNodeIds, topContext);
+  }
+
+  if (filterState.showOrphanModulesOnly) {
+    visibleNodeIds = intersects(visibleNodeIds, orphanIds);
   }
 
   if (currentSelectedNodeId && filterState.neighborhoodHops > 0) {
@@ -765,54 +1030,126 @@ function applyFilters(options: { fit?: boolean } = {}): { visibleCount: number; 
     visibleEdgeIds.add(edge.id());
   });
 
-  nodes.forEach(node => {
-    if (!visibleNodeIds.has(node.id())) {
-      node.addClass("dimmed");
-    }
-  });
+  cy.batch(() => {
+    nodes.forEach(node => {
+      if (!visibleNodeIds.has(node.id())) {
+        node.addClass("dimmed");
+      }
+    });
 
-  edges.forEach(edge => {
-    if (!visibleEdgeIds.has(edge.id())) {
-      edge.addClass("dimmed");
-    }
-  });
+    edges.forEach(edge => {
+      if (!visibleEdgeIds.has(edge.id())) {
+        edge.addClass("dimmed");
+      }
+    });
 
-  if (currentSelectedNodeId) {
-    const selected = cy.getElementById(currentSelectedNodeId);
-    if (!selected.empty()) {
-      selected.removeClass("dimmed");
-      selected.addClass("focus-primary");
+    if (currentSelectedNodeId) {
+      const selected = cy.getElementById(currentSelectedNodeId);
+      if (!selected.empty()) {
+        selected.removeClass("dimmed");
+        selected.addClass("focus-primary");
 
-      if (filterState.neighborhoodHops > 0) {
-        const neighborhood = getNeighborhood(currentSelectedNodeId, filterState.neighborhoodHops);
-        neighborhood.forEach(id => {
-          if (id === currentSelectedNodeId) return;
-          if (!visibleNodeIds.has(id)) return;
-          const node = cy.getElementById(id);
-          if (!node.empty()) node.addClass("focus-secondary");
+        if (filterState.neighborhoodHops > 0) {
+          const neighborhood = getNeighborhood(currentSelectedNodeId, filterState.neighborhoodHops);
+          neighborhood.forEach(id => {
+            if (id === currentSelectedNodeId) return;
+            if (!visibleNodeIds.has(id)) return;
+            const node = cy.getElementById(id);
+            if (!node.empty()) node.addClass("focus-secondary");
+          });
+        }
+
+        selected.incomers("edge").forEach(edge => {
+          if (visibleEdgeIds.has(edge.id())) edge.addClass("edge-incoming");
+        });
+        selected.outgoers("edge").forEach(edge => {
+          if (visibleEdgeIds.has(edge.id())) edge.addClass("edge-outgoing");
         });
       }
-
-      selected.incomers("edge").forEach(edge => {
-        if (visibleEdgeIds.has(edge.id())) edge.addClass("edge-incoming");
-      });
-      selected.outgoers("edge").forEach(edge => {
-        if (visibleEdgeIds.has(edge.id())) edge.addClass("edge-outgoing");
-      });
     }
-  }
+  });
 
   const visibleNodes = nodes.filter(node => !node.hasClass("dimmed"));
-  if (fit && visibleNodes.length > 0) {
+  
+  // If fitting and we have specific search matches, fit to just the matched nodes for better focus
+  if (fit && matchedSearchCount > 0) {
+    const matchedNodes = nodes.filter(node => lastSearchMatches.has(node.id()));
+    if (matchedNodes.length > 0) {
+      // Use a tighter padding for focused view
+      cy.fit(matchedNodes, 40);
+    }
+  } else if (fit && visibleNodes.length > 0) {
     cy.fit(visibleNodes, 80);
   }
 
-  return { visibleCount: visibleNodes.length, matchedSearchCount };
+  return { visibleCount: visibleNodes.length, matchedSearchCount, matchedAdvancedCount };
 }
 
-function renderDetails(nodeId: string | null): void {
-  currentSelectedNodeId = nodeId;
+function resetAllFilters(): void {
+  // Reset all filter state to defaults
+  filterState.searchQuery = "";
+  filterState.advancedQuery = "";
+  filterState.useSemanticSearch = false;
+  filterState.topDependedPercent = 100;
+  filterState.neighborhoodHops = 1;
+  filterState.edgeDirection = "all";
+  filterState.showStaticEdges = true;
+  filterState.showDynamicEdges = true;
+  filterState.showInternalEdges = true;
+  filterState.showExternalEdges = true;
+  filterState.showOrphanModulesOnly = false;
+  filterState.highlightGodFiles = false;
+  filterState.scalabilityMode = true;
+  filterState.clusteringMode = "directory";
+  filterState.minRiskScore = 0;
+
+  // Reset UI controls
+  searchInput.value = "";
+  advancedQueryInput.value = "";
+  topDependedRange.value = "100";
+  neighborhoodSelect.value = "1";
+  edgeDirectionSelect.value = "all";
+  toggleStaticEdges.checked = true;
+  toggleDynamicEdges.checked = true;
+  toggleInternalEdges.checked = true;
+  toggleExternalEdges.checked = true;
+  toggleOrphanModules.checked = false;
+  toggleGodFiles.checked = false;
+  toggleScalabilityMode.checked = true;
+  toggleClusteringMode.checked = false;
+  riskFilterRange.value = "0";
+
+  // Reset tracking variables
+  currentSelectedNodeId = null;
+  lastSearchMatches.clear();
+
+  // Update labels
+  formatTopDependedLabel(filterState.topDependedPercent);
+  formatRiskFilterLabel(filterState.minRiskScore);
+  setArchitectureChecksStatus("Architecture checks inactive.");
+
+  // Clear selection and apply filters
+  cy.nodes().unselect();
   applyFilters();
+  renderDetails(null, { applyGraphFilters: false });
+
+  setStatus("All filters reset to defaults.");
+}
+
+
+function renderDetails(nodeId: string | null, options: { applyGraphFilters?: boolean } = {}): void {
+  const { applyGraphFilters = true } = options;
+  currentSelectedNodeId = nodeId;
+  cy.nodes().unselect();
+  if (nodeId) {
+    const selected = cy.getElementById(nodeId);
+    if (!selected.empty()) {
+      selected.select();
+    }
+  }
+  if (applyGraphFilters) {
+    applyFilters();
+  }
 
   const requestId = ++detailsRequestCounter;
   if (!nodeId) {
@@ -830,6 +1167,10 @@ function renderDetails(nodeId: string | null): void {
        <p id="llm-explanation" data-request-id="${requestId}">Loading from local server...</p>`
     : "<p><strong>Optional LLM Summary:</strong> Disabled. Running fully local without model.</p>";
 
+  const isOrphan = Number(node.data("inDegree") ?? 0) === 0 && Number(node.data("outDegree") ?? 0) === 0;
+  ensureGraphDerivedData();
+  const isGodFile = cachedGodFileIds.has(nodeId);
+
   detailsPanel.innerHTML = `
     <h4>${escapeHtml(String(node.data("label") ?? nodeId))}</h4>
     <p><strong>Path:</strong> ${escapeHtml(String(node.data("path") ?? nodeId))}</p>
@@ -840,6 +1181,8 @@ function renderDetails(nodeId: string | null): void {
     <p><strong>Size:</strong> ${Number(node.data("sizeBytes") ?? 0)} bytes</p>
     <p><strong>In/Out:</strong> ${Number(node.data("inDegree") ?? 0)} / ${Number(node.data("outDegree") ?? 0)}</p>
     <p><strong>Risk:</strong> ${Number(node.data("riskScore") ?? 0).toFixed(2)}</p>
+    <p><strong>Orphan Module:</strong> ${isOrphan ? "Yes" : "No"}</p>
+    <p><strong>God File Heuristic:</strong> ${isGodFile ? "Flagged" : "Not flagged"}</p>
     <p><strong>Heuristic Summary:</strong></p>
     <p>${escapeHtml(heuristicSummary)}</p>
     ${llmSection}
@@ -862,14 +1205,21 @@ function reloadViewer(nextGraph: GraphData): void {
   cy.destroy();
   currentSelectedNodeId = null;
   detailsRequestCounter += 1;
+  currentGraph = nextGraph;
+  markGraphDerivedDataDirty();
+  updateEmptyStatePrompt(nextGraph.nodes.length === 0);
   cy = createViewer({
     container,
     graph: nextGraph,
-    onNodeSelect: renderDetails
+    onNodeSelect: renderDetails,
+    clusteringMode: filterState.clusteringMode,
+    progressiveRender: filterState.scalabilityMode,
+    onReady: () => {
+      applyFilters();
+      renderDetails(null, { applyGraphFilters: false });
+      playGalaxyEntryAnimation();
+    }
   });
-  applyFilters();
-  renderDetails(null);
-  playGalaxyEntryAnimation();
 }
 
 sampleButton.addEventListener("click", () => {
@@ -904,9 +1254,11 @@ fileInput.addEventListener("change", async event => {
   const file = target.files?.[0];
   if (!file) return;
 
+  setAnalysisLoadingState(true);
   setStatus(`Analyzing ${file.name}...`);
   try {
-    const analyzed = await createGraphFromZip(file);
+    const zipBuffer = await file.arrayBuffer();
+    const analyzed = await analyzeZipBuffer(zipBuffer, file.name);
     reloadViewer(analyzed);
     setStatus(
       `Loaded ${analyzed.nodes.length} nodes, ${analyzed.edges.length} edges. ` +
@@ -915,6 +1267,8 @@ fileInput.addEventListener("change", async event => {
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";
     setStatus(`Failed to analyze zip: ${message}`);
+  } finally {
+    setAnalysisLoadingState(false);
   }
 });
 
@@ -927,12 +1281,12 @@ loadGithubRepoButton.addEventListener("click", async () => {
   }
 
   setGithubLoadingState(true);
+  setAnalysisLoadingState(true);
   try {
     const parsed = parseGitHubRepoInput(rawInput);
     setStatus(`Downloading ${parsed.owner}/${parsed.repo} from GitHub...`);
     const { zipBuffer, resolvedRef } = await downloadGitHubZip(parsed);
-    setStatus(`Analyzing ${parsed.owner}/${parsed.repo}@${resolvedRef}...`);
-    const analyzed = await createGraphFromZipBuffer(zipBuffer);
+    const analyzed = await analyzeZipBuffer(zipBuffer, `${parsed.owner}/${parsed.repo}@${resolvedRef}`);
     reloadViewer(analyzed);
     setStatus(
       `Loaded ${analyzed.nodes.length} nodes, ${analyzed.edges.length} edges from ${parsed.owner}/${parsed.repo}@${resolvedRef}. ` +
@@ -942,6 +1296,7 @@ loadGithubRepoButton.addEventListener("click", async () => {
     const message = error instanceof Error ? error.message : "Unknown error";
     setStatus(`Failed to load GitHub repo: ${message}`);
   } finally {
+    setAnalysisLoadingState(false);
     setGithubLoadingState(false);
   }
 });
@@ -1048,15 +1403,18 @@ viewModeSelect.addEventListener("change", () => {
 
 focusButton.addEventListener("click", () => {
   filterState.searchQuery = searchInput.value.trim();
-  const result = applyFilters({ fit: true });
-
+  
   if (!filterState.searchQuery) {
+    lastSearchMatches.clear();
+    applyFilters();
     setStatus("Search cleared. Active filters still applied.");
     return;
   }
+  
+  const result = applyFilters({ fit: true });
 
   if (result.matchedSearchCount > 0) {
-    setStatus(`Focused ${result.matchedSearchCount} matched node(s) for "${filterState.searchQuery}".`);
+    setStatus(`Focused ${result.matchedSearchCount} matched node(s) for "${filterState.searchQuery}". Dimmed nodes shown for context.`);
   } else {
     setStatus(`No files matched "${filterState.searchQuery}". Try filename-only like "userService".`);
   }
@@ -1065,6 +1423,10 @@ focusButton.addEventListener("click", () => {
 searchInput.addEventListener("keydown", event => {
   if (event.key !== "Enter") return;
   focusButton.click();
+});
+
+resetFiltersButton.addEventListener("click", () => {
+  resetAllFilters();
 });
 
 topDependedRange.addEventListener("input", () => {
@@ -1130,9 +1492,38 @@ toggleExternalEdges.addEventListener("change", () => {
   applySemanticToggleStatus();
 });
 
+toggleScalabilityMode.addEventListener("change", () => {
+  filterState.scalabilityMode = toggleScalabilityMode.checked;
+  setStatus(
+    filterState.scalabilityMode
+      ? "Scalability mode enabled. Rendering uses progressive batches for large graphs."
+      : "Scalability mode disabled. Rendering uses full draw mode."
+  );
+});
+
+toggleOrphanModules.addEventListener("change", () => {
+  filterState.showOrphanModulesOnly = toggleOrphanModules.checked;
+  const result = applyFilters();
+  setArchitectureChecksStatus(
+    filterState.showOrphanModulesOnly
+      ? `Orphan-module check enabled. Visible nodes: ${result.visibleCount}.`
+      : `Orphan-module check disabled. Visible nodes: ${result.visibleCount}.`
+  );
+});
+
+toggleGodFiles.addEventListener("change", () => {
+  filterState.highlightGodFiles = toggleGodFiles.checked;
+  const result = applyFilters();
+  setArchitectureChecksStatus(
+    filterState.highlightGodFiles
+      ? `God-file heuristic highlighting enabled. Visible nodes: ${result.visibleCount}.`
+      : `God-file heuristic highlighting disabled. Visible nodes: ${result.visibleCount}.`
+  );
+});
+
 toggleLlmSummary.addEventListener("change", () => {
   if (currentSelectedNodeId) {
-    renderDetails(currentSelectedNodeId);
+    renderDetails(currentSelectedNodeId, { applyGraphFilters: false });
   }
   if (!toggleLlmSummary.checked) {
     setStatus("LLM summary disabled. Using local heuristic summaries only.");
@@ -1141,7 +1532,55 @@ toggleLlmSummary.addEventListener("change", () => {
   setStatus("LLM summary enabled. The app will gracefully fall back if the provider is unavailable.");
 });
 
+toggleClusteringMode.addEventListener("change", () => {
+  filterState.clusteringMode = toggleClusteringMode.checked ? "community" : "directory";
+  reloadViewer(currentGraph);
+  const modeLabel = filterState.clusteringMode === "community" ? "dependency communities" : "directory structure";
+  setStatus(`Clustering mode changed to: ${modeLabel}.`);
+});
+
+function formatRiskFilterLabel(threshold: number): void {
+  if (threshold <= 0) {
+    riskFilterValue.textContent = "Showing all risk levels.";
+  } else {
+    riskFilterValue.textContent = `Showing files with risk score ≥ ${threshold.toFixed(1)}.`;
+  }
+}
+
+riskFilterRange.addEventListener("input", () => {
+  filterState.minRiskScore = Number(riskFilterRange.value);
+  formatRiskFilterLabel(filterState.minRiskScore);
+  const result = applyFilters();
+  setStatus(`Risk score filter set to ≥ ${filterState.minRiskScore.toFixed(1)}. Visible nodes: ${result.visibleCount}.`);
+});
+
+advancedSearchButton.addEventListener("click", () => {
+  filterState.advancedQuery = advancedQueryInput.value.trim();
+  const result = applyFilters({ fit: true });
+
+  if (!filterState.advancedQuery) {
+    setStatus("Advanced semantic search cleared.");
+    return;
+  }
+
+  if (result.matchedAdvancedCount > 0) {
+    setStatus(`Semantic search matched ${result.matchedAdvancedCount} node(s) for "${filterState.advancedQuery}". Visible nodes: ${result.visibleCount}.`);
+  } else {
+    setStatus(`No results for semantic query "${filterState.advancedQuery}". Try: auth-logic, database-layer, api-endpoints, ui-components, testing`);
+  }
+});
+
+advancedQueryInput.addEventListener("keydown", event => {
+  if (event.key !== "Enter") return;
+  advancedSearchButton.click();
+});
+
 formatTopDependedLabel(filterState.topDependedPercent);
 setViewMode("single");
+formatRiskFilterLabel(filterState.minRiskScore);
+toggleScalabilityMode.checked = filterState.scalabilityMode;
 applyFilters();
+renderDetails(null, { applyGraphFilters: false });
+updateEmptyStatePrompt(true);
+setStatus("Upload a repo zip, add a GitHub link, or load the sample project to begin.");
 playGalaxyEntryAnimation();

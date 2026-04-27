@@ -1,12 +1,16 @@
 import cytoscape, { type Core } from "cytoscape";
-import { getDirectoryClusterPositions } from "./layout";
+import { getDirectoryClusterPositions, getCommunityClusterPositions, type ClusteringMode } from "./layout";
 import type { GraphData, GraphNode } from "./types";
 
 interface CreateViewerOptions {
   container?: HTMLElement;
   graph: GraphData;
   onNodeSelect?: (nodeId: string | null) => void;
+  onReady?: () => void;
   headless?: boolean;
+  clusteringMode?: ClusteringMode;
+  progressiveRender?: boolean;
+  renderBatchSize?: number;
 }
 
 interface Point {
@@ -37,6 +41,14 @@ function scaleSize(value: number, min: number, max: number, outMin: number, outM
   return outMin + t * (outMax - outMin);
 }
 
+function percentile(values: number[], ratio: number): number {
+  if (values.length === 0) return 0;
+  const sorted = [...values].sort((a, b) => a - b);
+  const clamped = Math.max(0, Math.min(1, ratio));
+  const index = Math.min(sorted.length - 1, Math.floor(clamped * (sorted.length - 1)));
+  return sorted[index];
+}
+
 function hashText(text: string): number {
   let h = 0;
   for (let i = 0; i < text.length; i += 1) {
@@ -47,13 +59,6 @@ function hashText(text: string): number {
 
 function seededUnit(seed: string): number {
   return (hashText(seed) % 10000) / 10000;
-}
-
-function percentile(values: number[], q: number): number {
-  if (values.length === 0) return 0;
-  const sorted = [...values].sort((a, b) => a - b);
-  const index = Math.min(sorted.length - 1, Math.max(0, Math.floor((sorted.length - 1) * q)));
-  return sorted[index];
 }
 
 function getNodeClasses(nodes: GraphNode[]): Map<string, string> {
@@ -149,6 +154,7 @@ function buildClusterStarElements(
       stars.push({
         data: {
           id: `star::${dir}::${i}`,
+          dir,
           color: starPalette[colorIndex],
           sizePx: `${size}`,
           baseOpacity: `${baseOpacity}`,
@@ -168,13 +174,51 @@ function buildClusterStarElements(
   return stars;
 }
 
+function addElementsInBatches(cy: Core, elements: Array<any>, batchSize: number, onComplete?: () => void): void {
+  let index = 0;
+
+  const addNextBatch = (): void => {
+    const batch = elements.slice(index, index + batchSize);
+    if (batch.length > 0) {
+      cy.add(batch);
+      index += batch.length;
+    }
+
+    if (index < elements.length) {
+      window.requestAnimationFrame(addNextBatch);
+      return;
+    }
+
+    window.requestAnimationFrame(() => onComplete?.());
+  };
+
+  addNextBatch();
+}
+
 export function createViewer(options: CreateViewerOptions): Core {
-  const { container, graph, onNodeSelect, headless = false } = options;
-  const positions = getDirectoryClusterPositions(graph.nodes);
+  const {
+    container,
+    graph,
+    onNodeSelect,
+    onReady,
+    headless = false,
+    clusteringMode = "directory",
+    progressiveRender = false,
+    renderBatchSize = 250
+  } = options;
+  
+  // Select positioning function based on clustering mode
+  const positions = clusteringMode === "community"
+    ? getCommunityClusterPositions(graph.nodes, graph.edges)
+    : getDirectoryClusterPositions(graph.nodes);
+  
   const nodeClasses = getNodeClasses(graph.nodes);
+  const sourceNodes = graph.nodes.filter(node => node.category === "source");
   const sourceSizes = graph.nodes
     .filter(node => node.category === "source")
     .map(node => node.sizeBytes);
+  const riskValues = sourceNodes.map(node => node.riskScore);
+  const criticalRiskThreshold = percentile(riskValues, 0.85);
   const minSize = sourceSizes.length > 0 ? Math.min(...sourceSizes) : 0;
   const maxSize = sourceSizes.length > 0 ? Math.max(...sourceSizes) : 1;
   const starElements = buildClusterStarElements(graph.nodes, positions);
@@ -182,6 +226,14 @@ export function createViewer(options: CreateViewerOptions): Core {
   const elements = [
     ...starElements,
     ...graph.nodes.map(node => ({
+      classes: [
+        nodeClasses.get(node.id) ?? "",
+        node.category === "source" && node.riskScore > 0 && node.riskScore >= criticalRiskThreshold
+          ? "critical-node"
+          : ""
+      ]
+        .filter(Boolean)
+        .join(" "),
       data: {
         id: node.id,
         label: node.category === "external" ? node.path : (node.path.split("/").pop() ?? node.id),
@@ -193,13 +245,14 @@ export function createViewer(options: CreateViewerOptions): Core {
         riskScore: node.riskScore,
         inDegree: node.inDegree,
         outDegree: node.outDegree,
+        coupling: node.inDegree + node.outDegree,
+        isCritical: node.category === "source" && node.riskScore > 0 && node.riskScore >= criticalRiskThreshold,
         sizeBytes: node.sizeBytes,
         color: dirColor(node.dir),
         sizePx: node.category === "external"
           ? "24"
           : `${scaleSize(node.sizeBytes, minSize, maxSize, 22, 72)}`
       },
-      classes: nodeClasses.get(node.id) ?? "",
       position: positions[node.id]
     })),
     ...graph.edges.map(edge => ({
@@ -214,10 +267,12 @@ export function createViewer(options: CreateViewerOptions): Core {
     }))
   ];
 
+  const useProgressiveRender = progressiveRender && !headless;
+
   const cy = cytoscape({
     container,
     headless,
-    elements,
+    elements: useProgressiveRender ? [] : elements,
     style: ([
       {
         selector: "node.source-node",
@@ -307,6 +362,14 @@ export function createViewer(options: CreateViewerOptions): Core {
           "border-width": 4,
           "border-color": "#ffffff",
           "z-index": 999
+        }
+      },
+      {
+        selector: "node.critical-node:not(.twinkle-star)",
+        style: {
+          "border-style": "solid",
+          "border-width": 4.2,
+          "border-color": "#ff3b3b"
         }
       },
       {
@@ -449,6 +512,27 @@ export function createViewer(options: CreateViewerOptions): Core {
         }
       },
       {
+        selector: "node.orphan-node",
+        style: {
+          "border-color": "#67e8f9",
+          "border-width": 3.8,
+          "shadow-color": "#67e8f9",
+          "shadow-opacity": 0.95,
+          "shadow-blur": 34
+        }
+      },
+      {
+        selector: "node.god-file-node",
+        style: {
+          "border-color": "#f59e0b",
+          "border-width": 4.4,
+          "border-style": "double",
+          "shadow-color": "#f59e0b",
+          "shadow-opacity": 1,
+          "shadow-blur": 42
+        }
+      },
+      {
         selector: ".dimmed",
         style: {
           opacity: 0.14,
@@ -467,8 +551,21 @@ export function createViewer(options: CreateViewerOptions): Core {
     maxZoom: 4
   });
 
+  if (useProgressiveRender) {
+    addElementsInBatches(cy, elements, Math.max(50, renderBatchSize), () => {
+      // Run these once elements exist; cy.ready may fire before batched additions complete.
+      lockZoomOutAtFit();
+      constrainPanToViewport();
+      startStarTwinkle();
+      onReady?.();
+    });
+  } else {
+    window.setTimeout(() => onReady?.(), 0);
+  }
+
   let isFittingToView = false;
   let isConstrainingPan = false;
+  let constrainRafId: number | null = null;
   const constrainPanToViewport = (): void => {
     if (headless || isConstrainingPan || isFittingToView) return;
     const width = cy.width();
@@ -506,6 +603,14 @@ export function createViewer(options: CreateViewerOptions): Core {
     }
   };
 
+  const requestConstrainPan = (): void => {
+    if (constrainRafId !== null) return;
+    constrainRafId = requestAnimationFrame(() => {
+      constrainRafId = null;
+      constrainPanToViewport();
+    });
+  };
+
   const lockZoomOutAtFit = (): void => {
     if (headless || isFittingToView) return;
 
@@ -524,7 +629,7 @@ export function createViewer(options: CreateViewerOptions): Core {
           const fitZoom = cy.zoom();
           cy.minZoom(fitZoom);
           isFittingToView = false;
-          constrainPanToViewport();
+          requestConstrainPan();
         }
       }
     );
@@ -533,13 +638,20 @@ export function createViewer(options: CreateViewerOptions): Core {
   // Decorative stars twinkle independently using randomized phase/speed values.
   let twinkleRafId: number | null = null;
   const startStarTwinkle = (): void => {
-    if (headless) return;
+    if (headless || twinkleRafId !== null) return;
     const stars = cy.nodes(".twinkle-star");
-    if (stars.length === 0) return;
+    if (stars.length === 0 || stars.length > 220) return;
 
     const start = performance.now();
+    let lastApplied = 0;
+    const minStepMs = 50; // ~20 FPS to avoid per-frame style churn.
     const animate = (now: number): void => {
       if (cy.destroyed()) return;
+      if (now - lastApplied < minStepMs) {
+        twinkleRafId = requestAnimationFrame(animate);
+        return;
+      }
+      lastApplied = now;
       const t = now - start;
 
       cy.batch(() => {
@@ -566,16 +678,20 @@ export function createViewer(options: CreateViewerOptions): Core {
     if (event.target === cy) onNodeSelect?.(null);
   });
   cy.on("layoutstop", lockZoomOutAtFit);
-  cy.on("layoutstop", constrainPanToViewport);
-  cy.on("pan zoom resize", constrainPanToViewport);
+  cy.on("layoutstop", requestConstrainPan);
+  cy.on("pan zoom resize", requestConstrainPan);
   cy.on("destroy", () => {
     if (twinkleRafId !== null) {
       cancelAnimationFrame(twinkleRafId);
       twinkleRafId = null;
     }
+    if (constrainRafId !== null) {
+      cancelAnimationFrame(constrainRafId);
+      constrainRafId = null;
+    }
   });
   cy.ready(lockZoomOutAtFit);
-  cy.ready(constrainPanToViewport);
+  cy.ready(requestConstrainPan);
   cy.ready(startStarTwinkle);
 
   return cy;
