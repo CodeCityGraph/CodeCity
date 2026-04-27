@@ -1,5 +1,5 @@
 import graph from "./graph.json";
-import { createGraphFromZipBuffer, type AnalysisProgress } from "./analyzer";
+import { createGraphFromZip, createGraphFromZipBuffer, type AnalysisProgress } from "./analyzer";
 import type { GraphData } from "./types";
 import { createViewer } from "./viewer";
 import {
@@ -268,11 +268,8 @@ async function analyzeZipBuffer(zipBuffer: ArrayBuffer, label: string): Promise<
   });
 }
 const detailsPanel = requiredElement<HTMLDivElement>("details");
-const exportPngButton = requiredElement<HTMLButtonElement>("exportPng");
-const exportPdfButton = requiredElement<HTMLButtonElement>("exportPdf");
-const exportJsonButton = requiredElement<HTMLButtonElement>("exportJson");
-const exportCsvButton = requiredElement<HTMLButtonElement>("exportCsv");
-const exportRiskButton = requiredElement<HTMLButtonElement>("exportRisk");
+const exportFormatSelect = requiredElement<HTMLSelectElement>("exportFormatSelect");
+const exportButton = requiredElement<HTMLButtonElement>("exportButton");
 
 function playGalaxyEntryAnimation(): void {
   appRoot.classList.remove("warp-in");
@@ -865,12 +862,6 @@ async function populateNodeExplanation(nodeId: string, requestId: number): Promi
     : "LLM provider unavailable. Heuristic summary above is being used instead.";
 }
 
-const initialGraph = normalizeSampleGraph(graph);
-let currentGraphData: GraphData = initialGraph;
-
-let cy = createViewer({
-  container,
-  graph: initialGraph,
 const EMPTY_GRAPH: GraphData = {
   nodes: [],
   edges: [],
@@ -886,6 +877,7 @@ let cy = createViewer({
   graph: EMPTY_GRAPH,
   onNodeSelect: renderDetails
 });
+let currentGraphData: GraphData = EMPTY_GRAPH;
 let cySecondary: ReturnType<typeof createViewer> | null = null;
 
 async function runExport(task: () => void | Promise<void>, successMessage: string): Promise<void> {
@@ -1228,24 +1220,29 @@ sampleButton.addEventListener("click", () => {
   setStatus("Loaded sample graph.");
 });
 
-exportPngButton.addEventListener("click", () => {
-  void runExport(() => exportGraphPng(cy), "Exported PNG snapshot.");
-});
-
-exportPdfButton.addEventListener("click", () => {
-  void runExport(() => exportPdfReport(currentGraphData, cy), "Exported PDF report.");
-});
-
-exportJsonButton.addEventListener("click", () => {
-  void runExport(() => exportMetricsJson(currentGraphData), "Exported JSON metrics.");
-});
-
-exportCsvButton.addEventListener("click", () => {
-  void runExport(() => exportMetricsCsv(currentGraphData), "Exported CSV metrics.");
-});
-
-exportRiskButton.addEventListener("click", () => {
-  void runExport(() => exportArchitectureRiskTxt(currentGraphData), "Exported architecture risk report.");
+exportButton.addEventListener("click", () => {
+  const format = exportFormatSelect.value;
+  if (format === "png") {
+    void runExport(() => exportGraphPng(cy), "Exported PNG snapshot.");
+    return;
+  }
+  if (format === "pdf") {
+    void runExport(() => exportPdfReport(currentGraphData, cy), "Exported PDF report.");
+    return;
+  }
+  if (format === "json") {
+    void runExport(() => exportMetricsJson(currentGraphData), "Exported JSON metrics.");
+    return;
+  }
+  if (format === "csv") {
+    void runExport(() => exportMetricsCsv(currentGraphData), "Exported CSV metrics.");
+    return;
+  }
+  if (format === "risk") {
+    void runExport(() => exportArchitectureRiskTxt(currentGraphData), "Exported architecture risk report.");
+    return;
+  }
+  setStatus("Choose an export format first.");
 });
 
 fileInput.addEventListener("change", async event => {

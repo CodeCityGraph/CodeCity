@@ -100,9 +100,6 @@
           <option value="incoming">Incoming only</option>
           <option value="outgoing">Outgoing only</option>
         </select>
-
-      <p class="filter-title"><strong>AI Summary</strong></p>
-      <label class="checkbox-row"><input id="toggleLlmSummary" type="checkbox" checked /> Use LLM server summary (optional)</label>
         <label for="riskFilterRange"><strong>Risk Score Filter</strong></label>
         <div class="stacked-control">
           <input id="riskFilterRange" type="range" min="0" max="15" step="0.5" value="0" />
@@ -131,47 +128,28 @@
         <label class="checkbox-row"><input id="toggleExternalEdges" type="checkbox" checked /> External dependencies</label>
       </section>
 
-      <h3>Export</h3>
-      <button id="exportPng" type="button">Export PNG Snapshot</button>
-      <button id="exportPdf" type="button">Export PDF Report</button>
-      <button id="exportJson" type="button">Export JSON Metrics</button>
-      <button id="exportCsv" type="button">Export CSV Metrics</button>
-      <button id="exportRisk" type="button">Export Architecture Risk</button>
-
-      <hr />
-
-      <h3>Legend</h3>
-      <p>Node: file</p>
-      <p>External node: package</p>
-      <p>Node size: file size</p>
-      <p>Color: directory cluster</p>
-      <p>Pink glow: critical/highly depended-on file</p>
-      <p>Yellow glow: medium architectural risk</p>
-      <p>Dashed edge: dynamic import</p>
-      <p>Orange edge: external dependency</p>
       <section class="control-section">
         <h3>Architecture Checks</h3>
         <label class="checkbox-row"><input id="toggleOrphanModules" type="checkbox" /> Show orphan modules only</label>
         <label class="checkbox-row"><input id="toggleGodFiles" type="checkbox" /> Highlight god files heuristic</label>
       </section>
+
     </aside>
 
     <main id="workspace">
-      <div id="cy"></div>
-      <div id="emptyStatePrompt" aria-live="polite">
-        Upload a repo zip, add a GitHub link, or load the sample project to begin.
+      <div id="graphArea">
+        <div id="graphPanePrimary" class="graph-pane">
+          <p id="paneBeforeLabel" class="pane-label" hidden>Before</p>
+          <div id="cy"></div>
+          <div id="emptyStatePrompt" aria-live="polite">
+            Upload a repo zip, add a GitHub link, or load the sample project to begin.
+          </div>
+        </div>
+        <div id="graphPaneSecondary" class="graph-pane" hidden>
+          <p id="paneAfterLabel" class="pane-label" hidden>After</p>
+          <div id="cySecondary"></div>
+        </div>
       </div>
-    </div>
-    <div id="graphArea">
-      <div id="graphPanePrimary" class="graph-pane">
-        <p id="paneBeforeLabel" class="pane-label" hidden>Before</p>
-        <div id="cy"></div>
-      </div>
-      <div id="graphPaneSecondary" class="graph-pane" hidden>
-        <p id="paneAfterLabel" class="pane-label" hidden>After</p>
-        <div id="cySecondary"></div>
-      </div>
-    </div>
     </main>
 
     <aside id="inspector">
@@ -199,6 +177,21 @@
         <h3 id="detailsHeader">Selected Node Details</h3>
         <div id="details">
           <p>Select a node to inspect details.</p>
+        </div>
+      </section>
+
+      <section class="inspector-card">
+        <h3>Export</h3>
+        <div class="export-controls">
+          <label for="exportFormatSelect"><strong>Format</strong></label>
+          <select id="exportFormatSelect">
+            <option value="png">PNG Snapshot</option>
+            <option value="pdf">PDF Report</option>
+            <option value="json">JSON Metrics</option>
+            <option value="csv">CSV Metrics</option>
+            <option value="risk">Architecture Risk (TXT)</option>
+          </select>
+          <button id="exportButton" type="button">Export</button>
         </div>
       </section>
     </aside>
