@@ -8,7 +8,7 @@
 </head>
 <body>
   <div id="app">
-    <div id="legend">
+    <aside id="legend">
       <div class="legend-header">
         <img
           class="legend-logo"
@@ -19,106 +19,129 @@
       </div>
       <p class="muted">Sprint 1 Integration + QA Workspace</p>
 
-      <label for="repoZipInput"><strong>Load Repo Zip</strong></label>
-      <input id="repoZipInput" type="file" accept=".zip" />
-      <label for="githubRepoInput"><strong>Load Public GitHub Repo</strong></label>
-      <div class="row">
-        <input id="githubRepoInput" type="text" placeholder="https://github.com/owner/repo" />
-        <button id="loadGithubRepo" type="button">Load</button>
+      <section class="control-section">
+        <h3>Data Source</h3>
+        <label for="repoZipInput"><strong>Load Repo Zip</strong></label>
+        <input id="repoZipInput" type="file" accept=".zip" />
+        <label for="githubRepoInput"><strong>Load Public GitHub Repo</strong></label>
+        <div class="row">
+          <input id="githubRepoInput" type="text" placeholder="https://github.com/owner/repo" />
+          <button id="loadGithubRepo" type="button">Load</button>
+        </div>
+        <button id="loadSample" type="button">Load Sample</button>
+      </section>
+
+      <section class="control-section">
+        <h3>Navigation</h3>
+        <label for="searchInput"><strong>Search + Focus</strong></label>
+        <div class="row">
+          <input id="searchInput" type="text" placeholder="src/service/user.ts" />
+          <button id="focusButton" type="button">Focus</button>
+          <button id="resetFiltersButton" type="button">Reset All</button>
+        </div>
+
+        <label for="advancedQueryInput"><strong>Advanced Semantic Search</strong></label>
+        <div class="row">
+          <input id="advancedQueryInput" type="text" placeholder='e.g., "auth logic", "database layer"' />
+          <button id="advancedSearchButton" type="button">Search</button>
+        </div>
+        <p class="muted" id="semanticSearchHint">Try: auth-logic, database-layer, api-endpoints, ui-components, testing</p>
+      </section>
+
+      <section class="control-section">
+        <h3>Graph Filters</h3>
+        <label for="topDependedRange"><strong>Most Depended-On Files</strong></label>
+        <div class="stacked-control">
+          <input id="topDependedRange" type="range" min="5" max="100" step="5" value="100" />
+          <p id="topDependedValue" class="muted-inline">Showing top 100% by in-degree.</p>
+        </div>
+
+        <label for="neighborhoodSelect"><strong>Selected Node Neighborhood</strong></label>
+        <select id="neighborhoodSelect">
+          <option value="0">Off</option>
+          <option value="1" selected>1 hop</option>
+          <option value="2">2 hops</option>
+        </select>
+
+        <label for="edgeDirectionSelect"><strong>Edge Direction (Selected Node)</strong></label>
+        <select id="edgeDirectionSelect">
+          <option value="all" selected>All</option>
+          <option value="incoming">Incoming only</option>
+          <option value="outgoing">Outgoing only</option>
+        </select>
+
+        <label for="riskFilterRange"><strong>Risk Score Filter</strong></label>
+        <div class="stacked-control">
+          <input id="riskFilterRange" type="range" min="0" max="15" step="0.5" value="0" />
+          <p id="riskFilterValue" class="muted-inline">Showing all risk levels.</p>
+        </div>
+      </section>
+
+      <section class="control-section">
+        <h3>Modes</h3>
+        <label class="checkbox-row">
+          <input id="toggleClusteringMode" type="checkbox" />
+          Auto-cluster by dependency communities (default: directory)
+        </label>
+        <label class="checkbox-row">
+          <input id="toggleScalabilityMode" type="checkbox" />
+          Analyze in Web Worker and render large graphs progressively
+        </label>
+        <label class="checkbox-row"><input id="toggleLlmSummary" type="checkbox" /> Use local LLM server (optional)</label>
+      </section>
+
+      <section class="control-section">
+        <h3>Dependency Semantics</h3>
+        <label class="checkbox-row"><input id="toggleStaticEdges" type="checkbox" checked /> Static imports</label>
+        <label class="checkbox-row"><input id="toggleDynamicEdges" type="checkbox" checked /> Dynamic imports</label>
+        <label class="checkbox-row"><input id="toggleInternalEdges" type="checkbox" checked /> Internal dependencies</label>
+        <label class="checkbox-row"><input id="toggleExternalEdges" type="checkbox" checked /> External dependencies</label>
+      </section>
+
+      <section class="control-section">
+        <h3>Architecture Checks</h3>
+        <label class="checkbox-row"><input id="toggleOrphanModules" type="checkbox" /> Show orphan modules only</label>
+        <label class="checkbox-row"><input id="toggleGodFiles" type="checkbox" /> Highlight god files heuristic</label>
+      </section>
+    </aside>
+
+    <main id="workspace">
+      <div id="cy"></div>
+      <div id="emptyStatePrompt" aria-live="polite">
+        Upload a repo zip, add a GitHub link, or load the sample project to begin.
       </div>
-      <button id="loadSample" type="button">Load Sample</button>
+    </main>
 
-      <hr />
+    <aside id="inspector">
+      <section class="inspector-card">
+        <h3>Run Status</h3>
+        <p id="status" class="status">Upload a repo zip, add a GitHub link, or load the sample project to begin.</p>
+        <p id="architectureChecksStatus" class="status">Architecture checks inactive.</p>
+      </section>
 
-      <label for="searchInput"><strong>Search + Focus</strong></label>
-      <div class="row">
-        <input id="searchInput" type="text" placeholder="src/service/user.ts" />
-        <button id="focusButton" type="button">Focus</button>
-        <button id="resetFiltersButton" type="button">Reset All</button>
-      </div>
+      <section class="inspector-card">
+        <h3>Reading Guide</h3>
+        <p>Node: file</p>
+        <p>External node: package</p>
+        <p>Node size: file size</p>
+        <p>Color: directory cluster</p>
+        <p>Pink glow: critical/highly depended-on file</p>
+        <p>Yellow glow: medium architectural risk</p>
+        <p>Cyan glow: orphan module (no in/out dependencies)</p>
+        <p>Amber glow: god file heuristic (high LOC and high coupling)</p>
+        <p>Dashed edge: dynamic import</p>
+        <p>Orange edge: external dependency</p>
+      </section>
 
-      <label for="topDependedRange"><strong>Most Depended-On Files</strong></label>
-      <div class="stacked-control">
-        <input id="topDependedRange" type="range" min="5" max="100" step="5" value="100" />
-        <p id="topDependedValue" class="muted-inline">Showing top 100% by in-degree.</p>
-      </div>
+      <section class="inspector-card">
+        <h3 id="detailsHeader">Selected Node Details</h3>
+        <div id="details">
+          <p>Select a node to inspect details.</p>
+        </div>
+      </section>
+    </aside>
+  </div>
 
-      <label for="neighborhoodSelect"><strong>Selected Node Neighborhood</strong></label>
-      <select id="neighborhoodSelect">
-        <option value="0">Off</option>
-        <option value="1" selected>1 hop</option>
-        <option value="2">2 hops</option>
-      </select>
-
-      <label for="edgeDirectionSelect"><strong>Edge Direction (Selected Node)</strong></label>
-      <select id="edgeDirectionSelect">
-        <option value="all" selected>All</option>
-        <option value="incoming">Incoming only</option>
-        <option value="outgoing">Outgoing only</option>
-      </select>
-
-      <p class="filter-title"><strong>Clustering Mode</strong></p>
-      <label class="checkbox-row">
-        <input id="toggleClusteringMode" type="checkbox" />
-        Auto-cluster by dependency communities (default: directory)
-      </label>
-
-      <p class="filter-title"><strong>Scalability Mode</strong></p>
-      <label class="checkbox-row">
-        <input id="toggleScalabilityMode" type="checkbox" />
-        Analyze in Web Worker and render large graphs progressively
-      </label>
-      <p id="status" class="status">Loaded sample graph.</p>
-
-      <label for="advancedQueryInput"><strong>Advanced Semantic Search</strong></label>
-      <div class="row">
-        <input id="advancedQueryInput" type="text" placeholder='e.g., "auth logic", "database layer"' />
-        <button id="advancedSearchButton" type="button">Search</button>
-      </div>
-      <p class="muted" id="semanticSearchHint">Try: auth-logic, database-layer, api-endpoints, ui-components, testing</p>
-
-      <label for="riskFilterRange"><strong>Risk Score Filter</strong></label>
-      <div class="stacked-control">
-        <input id="riskFilterRange" type="range" min="0" max="15" step="0.5" value="0" />
-        <p id="riskFilterValue" class="muted-inline">Showing all risk levels.</p>
-      </div>
-
-      <p class="filter-title"><strong>Dependency Semantics</strong></p>
-      <label class="checkbox-row"><input id="toggleStaticEdges" type="checkbox" checked /> Static imports</label>
-      <label class="checkbox-row"><input id="toggleDynamicEdges" type="checkbox" checked /> Dynamic imports</label>
-      <label class="checkbox-row"><input id="toggleInternalEdges" type="checkbox" checked /> Internal dependencies</label>
-      <label class="checkbox-row"><input id="toggleExternalEdges" type="checkbox" checked /> External dependencies</label>
-
-      <p class="filter-title"><strong>AI Summary</strong></p>
-      <label class="checkbox-row"><input id="toggleLlmSummary" type="checkbox" /> Use local LLM server (optional)</label>
-
-      <p class="filter-title"><strong>Architecture Checks</strong></p>
-      <label class="checkbox-row"><input id="toggleOrphanModules" type="checkbox" /> Show orphan modules only</label>
-      <label class="checkbox-row"><input id="toggleGodFiles" type="checkbox" /> Highlight god files heuristic</label>
-      <p id="architectureChecksStatus" class="status">Architecture checks inactive.</p>
-
-      <hr />
-
-      <h3>Legend</h3>
-      <p>Node: file</p>
-      <p>External node: package</p>
-      <p>Node size: file size</p>
-      <p>Color: directory cluster</p>
-      <p>Pink glow: critical/highly depended-on file</p>
-      <p>Yellow glow: medium architectural risk</p>
-      <p>Cyan glow: orphan module (no in/out dependencies)</p>
-      <p>Amber glow: god file heuristic (high LOC and high coupling)</p>
-      <p>Dashed edge: dynamic import</p>
-      <p>Orange edge: external dependency</p>
-
-      <h3 id="detailsHeader">Details</h3>
-      <div id="details">
-        <p>Select a node to inspect details.</p>
-      </div>
-    </div>
-
-    <div id="cy"></div>
-
-    <script type="module" src="/src/main.ts"></script>
-  </body>
+  <script type="module" src="/src/main.ts"></script>
+</body>
 </html>

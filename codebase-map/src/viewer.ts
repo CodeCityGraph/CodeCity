@@ -511,6 +511,7 @@ export function createViewer(options: CreateViewerOptions): Core {
 
   let isFittingToView = false;
   let isConstrainingPan = false;
+  let constrainRafId: number | null = null;
   const constrainPanToViewport = (): void => {
     if (headless || isConstrainingPan || isFittingToView) return;
     const width = cy.width();
@@ -548,6 +549,14 @@ export function createViewer(options: CreateViewerOptions): Core {
     }
   };
 
+  const requestConstrainPan = (): void => {
+    if (constrainRafId !== null) return;
+    constrainRafId = requestAnimationFrame(() => {
+      constrainRafId = null;
+      constrainPanToViewport();
+    });
+  };
+
   const lockZoomOutAtFit = (): void => {
     if (headless || isFittingToView) return;
 
@@ -566,7 +575,7 @@ export function createViewer(options: CreateViewerOptions): Core {
           const fitZoom = cy.zoom();
           cy.minZoom(fitZoom);
           isFittingToView = false;
-          constrainPanToViewport();
+          requestConstrainPan();
         }
       }
     );
@@ -575,13 +584,20 @@ export function createViewer(options: CreateViewerOptions): Core {
   // Decorative stars twinkle independently using randomized phase/speed values.
   let twinkleRafId: number | null = null;
   const startStarTwinkle = (): void => {
-    if (headless) return;
+    if (headless || twinkleRafId !== null) return;
     const stars = cy.nodes(".twinkle-star");
-    if (stars.length === 0) return;
+    if (stars.length === 0 || stars.length > 220) return;
 
     const start = performance.now();
+    let lastApplied = 0;
+    const minStepMs = 50; // ~20 FPS to avoid per-frame style churn.
     const animate = (now: number): void => {
       if (cy.destroyed()) return;
+      if (now - lastApplied < minStepMs) {
+        twinkleRafId = requestAnimationFrame(animate);
+        return;
+      }
+      lastApplied = now;
       const t = now - start;
 
       cy.batch(() => {
@@ -608,16 +624,20 @@ export function createViewer(options: CreateViewerOptions): Core {
     if (event.target === cy) onNodeSelect?.(null);
   });
   cy.on("layoutstop", lockZoomOutAtFit);
-  cy.on("layoutstop", constrainPanToViewport);
-  cy.on("pan zoom resize", constrainPanToViewport);
+  cy.on("layoutstop", requestConstrainPan);
+  cy.on("pan zoom resize", requestConstrainPan);
   cy.on("destroy", () => {
     if (twinkleRafId !== null) {
       cancelAnimationFrame(twinkleRafId);
       twinkleRafId = null;
     }
+    if (constrainRafId !== null) {
+      cancelAnimationFrame(constrainRafId);
+      constrainRafId = null;
+    }
   });
   cy.ready(lockZoomOutAtFit);
-  cy.ready(constrainPanToViewport);
+  cy.ready(requestConstrainPan);
   cy.ready(startStarTwinkle);
 
   return cy;
