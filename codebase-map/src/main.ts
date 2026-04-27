@@ -51,7 +51,7 @@ const filterState: FilterState = {
   showExternalEdges: true,
   showOrphanModulesOnly: false,
   highlightGodFiles: false,
-  scalabilityMode: false,
+  scalabilityMode: true,
   clusteringMode: "directory",
   minRiskScore: 0
 };
@@ -130,6 +130,7 @@ const toggleOrphanModules = requiredElement<HTMLInputElement>("toggleOrphanModul
 const toggleGodFiles = requiredElement<HTMLInputElement>("toggleGodFiles");
 const statusLabel = requiredElement<HTMLParagraphElement>("status");
 const architectureChecksStatus = requiredElement<HTMLParagraphElement>("architectureChecksStatus");
+const emptyStatePrompt = requiredElement<HTMLDivElement>("emptyStatePrompt");
 
 interface WorkerAnalyzeRequest {
   type: "analyze";
@@ -165,7 +166,7 @@ function setAnalysisLoadingState(isLoading: boolean): void {
 }
 
 function formatAnalysisProgress(progress: AnalysisProgress, label: string): string {
-  const base = `Scalability mode: ${label}`;
+  const base = `${label}`;
   if (progress.stage === "loading") {
     return `${base} - opening archive...`;
   }
@@ -190,10 +191,6 @@ function getAnalysisWorker(): Worker | null {
 }
 
 async function analyzeZipBuffer(zipBuffer: ArrayBuffer, label: string): Promise<GraphData> {
-  if (!filterState.scalabilityMode) {
-    return createGraphFromZipBuffer(zipBuffer);
-  }
-
   const worker = getAnalysisWorker();
   if (!worker) {
     return createGraphFromZipBuffer(zipBuffer);
@@ -233,7 +230,7 @@ async function analyzeZipBuffer(zipBuffer: ArrayBuffer, label: string): Promise<
 
     worker.addEventListener("message", handleMessage);
     worker.addEventListener("error", handleError);
-    setStatus(`Scalability mode: analyzing ${label} in a Web Worker...`);
+    setStatus(`Analyzing ${label} in a Web Worker...`);
     worker.postMessage({ type: "analyze", requestId, zipBuffer } satisfies WorkerAnalyzeRequest, [zipBuffer]);
   });
 }
@@ -581,14 +578,38 @@ async function populateNodeExplanation(nodeId: string, requestId: number): Promi
     : "Local LLM unavailable. Heuristic summary above is being used instead.";
 }
 
+const EMPTY_GRAPH: GraphData = {
+  nodes: [],
+  edges: [],
+  unresolvedImports: []
+};
+
+function updateEmptyStatePrompt(isEmpty: boolean): void {
+  emptyStatePrompt.classList.toggle("hidden", !isEmpty);
+}
+
 let cy = createViewer({
   container,
-  graph: normalizeSampleGraph(graph),
+  graph: EMPTY_GRAPH,
   onNodeSelect: renderDetails
 });
 
-let currentGraph: GraphData = normalizeSampleGraph(graph);
+let currentGraph: GraphData = EMPTY_GRAPH;
 let lastSearchMatches: Set<string> = new Set();
+let graphDerivedDataDirty = true;
+let cachedOrphanIds: Set<string> = new Set();
+let cachedGodFileIds: Set<string> = new Set();
+
+function markGraphDerivedDataDirty(): void {
+  graphDerivedDataDirty = true;
+}
+
+function ensureGraphDerivedData(): void {
+  if (!graphDerivedDataDirty) return;
+  cachedOrphanIds = getOrphanModuleIds();
+  cachedGodFileIds = getGodFileIds();
+  graphDerivedDataDirty = false;
+}
 
 function applyFilters(options: { fit?: boolean } = {}): { visibleCount: number; matchedSearchCount: number; matchedAdvancedCount: number } {
   const { fit = false } = options;
@@ -596,15 +617,18 @@ function applyFilters(options: { fit?: boolean } = {}): { visibleCount: number; 
   const nodes = cy.nodes().filter(node => !node.hasClass("twinkle-star"));
   const edges = cy.edges();
 
-  nodes.removeClass("dimmed focus-primary focus-secondary orphan-node god-file-node");
-  edges.removeClass("dimmed edge-incoming edge-outgoing");
+  ensureGraphDerivedData();
+  const orphanIds = cachedOrphanIds;
+  const godFileIds = cachedGodFileIds;
 
-  const orphanIds = getOrphanModuleIds();
-  const godFileIds = getGodFileIds();
+  cy.batch(() => {
+    nodes.removeClass("dimmed focus-primary focus-secondary orphan-node god-file-node");
+    edges.removeClass("dimmed edge-incoming edge-outgoing");
 
-  nodes.forEach(node => {
-    if (orphanIds.has(node.id())) node.addClass("orphan-node");
-    if (filterState.highlightGodFiles && godFileIds.has(node.id())) node.addClass("god-file-node");
+    nodes.forEach(node => {
+      if (orphanIds.has(node.id())) node.addClass("orphan-node");
+      if (filterState.highlightGodFiles && godFileIds.has(node.id())) node.addClass("god-file-node");
+    });
   });
 
   let visibleNodeIds = new Set(nodes.map(node => node.id()));
@@ -702,42 +726,44 @@ function applyFilters(options: { fit?: boolean } = {}): { visibleCount: number; 
     visibleEdgeIds.add(edge.id());
   });
 
-  nodes.forEach(node => {
-    if (!visibleNodeIds.has(node.id())) {
-      node.addClass("dimmed");
-    }
-  });
+  cy.batch(() => {
+    nodes.forEach(node => {
+      if (!visibleNodeIds.has(node.id())) {
+        node.addClass("dimmed");
+      }
+    });
 
-  edges.forEach(edge => {
-    if (!visibleEdgeIds.has(edge.id())) {
-      edge.addClass("dimmed");
-    }
-  });
+    edges.forEach(edge => {
+      if (!visibleEdgeIds.has(edge.id())) {
+        edge.addClass("dimmed");
+      }
+    });
 
-  if (currentSelectedNodeId) {
-    const selected = cy.getElementById(currentSelectedNodeId);
-    if (!selected.empty()) {
-      selected.removeClass("dimmed");
-      selected.addClass("focus-primary");
+    if (currentSelectedNodeId) {
+      const selected = cy.getElementById(currentSelectedNodeId);
+      if (!selected.empty()) {
+        selected.removeClass("dimmed");
+        selected.addClass("focus-primary");
 
-      if (filterState.neighborhoodHops > 0) {
-        const neighborhood = getNeighborhood(currentSelectedNodeId, filterState.neighborhoodHops);
-        neighborhood.forEach(id => {
-          if (id === currentSelectedNodeId) return;
-          if (!visibleNodeIds.has(id)) return;
-          const node = cy.getElementById(id);
-          if (!node.empty()) node.addClass("focus-secondary");
+        if (filterState.neighborhoodHops > 0) {
+          const neighborhood = getNeighborhood(currentSelectedNodeId, filterState.neighborhoodHops);
+          neighborhood.forEach(id => {
+            if (id === currentSelectedNodeId) return;
+            if (!visibleNodeIds.has(id)) return;
+            const node = cy.getElementById(id);
+            if (!node.empty()) node.addClass("focus-secondary");
+          });
+        }
+
+        selected.incomers("edge").forEach(edge => {
+          if (visibleEdgeIds.has(edge.id())) edge.addClass("edge-incoming");
+        });
+        selected.outgoers("edge").forEach(edge => {
+          if (visibleEdgeIds.has(edge.id())) edge.addClass("edge-outgoing");
         });
       }
-
-      selected.incomers("edge").forEach(edge => {
-        if (visibleEdgeIds.has(edge.id())) edge.addClass("edge-incoming");
-      });
-      selected.outgoers("edge").forEach(edge => {
-        if (visibleEdgeIds.has(edge.id())) edge.addClass("edge-outgoing");
-      });
     }
-  }
+  });
 
   const visibleNodes = nodes.filter(node => !node.hasClass("dimmed"));
   
@@ -769,7 +795,7 @@ function resetAllFilters(): void {
   filterState.showExternalEdges = true;
   filterState.showOrphanModulesOnly = false;
   filterState.highlightGodFiles = false;
-  filterState.scalabilityMode = false;
+  filterState.scalabilityMode = true;
   filterState.clusteringMode = "directory";
   filterState.minRiskScore = 0;
 
@@ -785,7 +811,7 @@ function resetAllFilters(): void {
   toggleExternalEdges.checked = true;
   toggleOrphanModules.checked = false;
   toggleGodFiles.checked = false;
-  toggleScalabilityMode.checked = false;
+  toggleScalabilityMode.checked = true;
   toggleClusteringMode.checked = false;
   riskFilterRange.value = "0";
 
@@ -801,13 +827,14 @@ function resetAllFilters(): void {
   // Clear selection and apply filters
   cy.nodes().unselect();
   applyFilters();
-  renderDetails(null);
+  renderDetails(null, { applyGraphFilters: false });
 
   setStatus("All filters reset to defaults.");
 }
 
 
-function renderDetails(nodeId: string | null): void {
+function renderDetails(nodeId: string | null, options: { applyGraphFilters?: boolean } = {}): void {
+  const { applyGraphFilters = true } = options;
   currentSelectedNodeId = nodeId;
   cy.nodes().unselect();
   if (nodeId) {
@@ -816,7 +843,9 @@ function renderDetails(nodeId: string | null): void {
       selected.select();
     }
   }
-  applyFilters();
+  if (applyGraphFilters) {
+    applyFilters();
+  }
 
   const requestId = ++detailsRequestCounter;
   if (!nodeId) {
@@ -835,7 +864,8 @@ function renderDetails(nodeId: string | null): void {
     : "<p><strong>Optional LLM Summary:</strong> Disabled. Running fully local without model.</p>";
 
   const isOrphan = Number(node.data("inDegree") ?? 0) === 0 && Number(node.data("outDegree") ?? 0) === 0;
-  const isGodFile = getGodFileIds().has(nodeId);
+  ensureGraphDerivedData();
+  const isGodFile = cachedGodFileIds.has(nodeId);
 
   detailsPanel.innerHTML = `
     <h4>${escapeHtml(String(node.data("label") ?? nodeId))}</h4>
@@ -864,6 +894,8 @@ function reloadViewer(nextGraph: GraphData): void {
   currentSelectedNodeId = null;
   detailsRequestCounter += 1;
   currentGraph = nextGraph;
+  markGraphDerivedDataDirty();
+  updateEmptyStatePrompt(nextGraph.nodes.length === 0);
   cy = createViewer({
     container,
     graph: nextGraph,
@@ -872,7 +904,7 @@ function reloadViewer(nextGraph: GraphData): void {
     progressiveRender: filterState.scalabilityMode,
     onReady: () => {
       applyFilters();
-      renderDetails(null);
+      renderDetails(null, { applyGraphFilters: false });
       playGalaxyEntryAnimation();
     }
   });
@@ -1034,8 +1066,8 @@ toggleScalabilityMode.addEventListener("change", () => {
   filterState.scalabilityMode = toggleScalabilityMode.checked;
   setStatus(
     filterState.scalabilityMode
-      ? "Scalability mode enabled. Large repos will use worker analysis and progressive rendering."
-      : "Scalability mode disabled. Loading uses the regular single-pass path."
+      ? "Scalability mode enabled. Rendering uses progressive batches for large graphs."
+      : "Scalability mode disabled. Rendering uses full draw mode."
   );
 });
 
@@ -1061,7 +1093,7 @@ toggleGodFiles.addEventListener("change", () => {
 
 toggleLlmSummary.addEventListener("change", () => {
   if (currentSelectedNodeId) {
-    renderDetails(currentSelectedNodeId);
+    renderDetails(currentSelectedNodeId, { applyGraphFilters: false });
   }
   if (!toggleLlmSummary.checked) {
     setStatus("LLM summary disabled. Using local heuristic summaries only.");
@@ -1115,5 +1147,9 @@ advancedQueryInput.addEventListener("keydown", event => {
 
 formatTopDependedLabel(filterState.topDependedPercent);
 formatRiskFilterLabel(filterState.minRiskScore);
+toggleScalabilityMode.checked = filterState.scalabilityMode;
 applyFilters();
+renderDetails(null, { applyGraphFilters: false });
+updateEmptyStatePrompt(true);
+setStatus("Upload a repo zip, add a GitHub link, or load the sample project to begin.");
 playGalaxyEntryAnimation();
